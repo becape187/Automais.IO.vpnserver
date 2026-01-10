@@ -47,7 +47,8 @@ O serviço lê suas configurações do arquivo `/root/automais.io/vpnserver.env`
 
 ```bash
 VPN_SERVER_NAME=automais.io
-API_C_SHARP_URL=http://localhost:5000
+API_C_SHARP_URL=https://srv01.automais.io:5001
+API_C_SHARP_VERIFY_SSL=true
 SYNC_INTERVAL_SECONDS=60
 PORT=8000
 WIREGUARD_CONFIG_DIR=/etc/wireguard

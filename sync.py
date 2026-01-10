@@ -1,6 +1,7 @@
 """
 Sincronização de recursos com a API C#
 """
+import os
 import httpx
 import logging
 from typing import Dict, Any
@@ -24,7 +25,15 @@ async def sync_resources_from_api():
         return
     
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        # Configurar cliente HTTP
+        # Se usar HTTPS com certificado auto-assinado, pode precisar de verify=False
+        # ATENÇÃO: verify=False desabilita verificação SSL (não recomendado para produção)
+        verify_ssl = os.getenv("API_C_SHARP_VERIFY_SSL", "true").lower() == "true"
+        
+        async with httpx.AsyncClient(
+            timeout=30.0,
+            verify=verify_ssl  # Verificar certificado SSL
+        ) as client:
             response = await client.get(
                 f"{API_C_SHARP_URL}/api/vpn-servers/{VPN_SERVER_NAME}/resources",
                 headers={"Accept": "application/json"}
@@ -49,9 +58,21 @@ async def sync_resources_from_api():
             )
             
     except httpx.TimeoutException:
-        logger.error(f"Timeout ao consultar API principal: {API_C_SHARP_URL}")
+        logger.error(f"⏱️ Timeout ao consultar API principal: {API_C_SHARP_URL}")
+        logger.error(f"   Verifique se a API C# está acessível e respondendo")
+    except httpx.ConnectError as e:
+        logger.error(f"🔌 Erro de conexão com API principal: {API_C_SHARP_URL}")
+        logger.error(f"   Detalhes: {e}")
+        logger.error(f"   Verifique se:")
+        logger.error(f"   - A API C# está rodando (systemctl status automais-api.service)")
+        logger.error(f"   - A URL está correta no vpnserver.env")
+        logger.error(f"   - O firewall não está bloqueando a porta")
+    except httpx.HTTPStatusError as e:
+        logger.error(f"📡 Erro HTTP {e.response.status_code} ao consultar API: {e.response.url}")
+        logger.error(f"   Resposta: {e.response.text[:200]}")
     except Exception as e:
-        logger.error(f"Erro ao sincronizar recursos: {e}")
+        logger.error(f"❌ Erro ao sincronizar recursos: {type(e).__name__}: {e}")
+        logger.error(f"   URL tentada: {API_C_SHARP_URL}/api/vpn-servers/{VPN_SERVER_NAME}/resources")
 
 
 def is_resource_managed(resource_id: str, resource_type: str = "vpn_network") -> bool:

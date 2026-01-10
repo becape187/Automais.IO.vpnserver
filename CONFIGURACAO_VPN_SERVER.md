@@ -63,22 +63,44 @@ VPN_SERVER_NAME=automais.io
 
 **Descrição:** URL base da API C# principal.
 
-**Padrão:** `http://localhost:5000`
+**Padrão:** `http://localhost:5000` (apenas desenvolvimento)
 
-**Exemplo:**
+**⚠️ IMPORTANTE:** Em produção, a API C# geralmente roda em **HTTPS na porta 5001**.
+
+**Exemplo para produção (HTTPS):**
+```bash
+API_C_SHARP_URL=https://srv01.automais.io:5001
+```
+
+**Exemplo para HTTPS sem porta (se usar nginx/proxy):**
+```bash
+API_C_SHARP_URL=https://api.automais.io
+```
+
+**Exemplo para desenvolvimento local (HTTP):**
 ```bash
 API_C_SHARP_URL=http://localhost:5000
 ```
 
-**Para acesso remoto:**
+### `API_C_SHARP_VERIFY_SSL` (Opcional)
+
+**Descrição:** Se deve verificar o certificado SSL ao conectar via HTTPS.
+
+**Padrão:** `true` (verifica certificado)
+
+**Exemplo:**
 ```bash
-API_C_SHARP_URL=http://srv01.automais.io:5000
+# Verificar certificado (recomendado para produção)
+API_C_SHARP_VERIFY_SSL=true
+
+# Não verificar certificado (apenas para certificados auto-assinados)
+API_C_SHARP_VERIFY_SSL=false
 ```
 
-**Para HTTPS:**
-```bash
-API_C_SHARP_URL=https://api.automais.io
-```
+**⚠️ Importante:** 
+- Use `false` apenas se a API usar certificado auto-assinado ou se houver problemas de certificado
+- Em produção, sempre use `true` para manter a segurança
+- Se usar `false`, considere adicionar o certificado ao sistema ao invés de desabilitar verificação
 
 ---
 
