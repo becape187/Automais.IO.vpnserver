@@ -297,7 +297,7 @@ def get_dashboard_html() -> str:
                         // Usar nome do router se disponível, senão usar chave pública abreviada
                         const peerDisplayName = peer.router_name || peer.vpn_network_name || peer.public_key.substring(0, 16) + '...';
                         const peerSubtitle = peer.router_name && peer.vpn_network_name ? 
-                            `VPN: ${peer.vpn_network_name}` : 
+                            'VPN: ' + peer.vpn_network_name : 
                             (peer.vpn_network_name || '');
                         
                         interfaceHtml += `
