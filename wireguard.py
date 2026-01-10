@@ -216,11 +216,16 @@ async def allocate_vpn_ip(vpn_network_id: str, manual_ip: Optional[str] = None) 
 
 async def add_peer_to_interface(interface_name: str, public_key: str, allowed_ips: str, router_id: str = None, router_name: str = None, vpn_network_id: str = None, vpn_network_name: str = None):
     """Adiciona peer à interface WireGuard com comentários identificadores"""
+    # Validar que allowed_ips não está vazio
+    if not allowed_ips or not allowed_ips.strip():
+        raise ValueError(f"allowed_ips não pode estar vazio para o peer {public_key[:16]}...")
+    
     # Verificar se interface está ativa
     stdout, _, returncode = execute_command(f"wg show {interface_name}", check=False)
     interface_active = returncode == 0
     
-    # Adicionar peer via wg set (funciona mesmo se interface não estiver ativa, mas será aplicado quando ativar)
+    # Adicionar/atualizar peer via wg set (funciona mesmo se interface não estiver ativa, mas será aplicado quando ativar)
+    # IMPORTANTE: wg set sempre atualiza o peer, mesmo se já existir
     execute_command(f"wg set {interface_name} peer {public_key} allowed-ips {allowed_ips}")
     
     # Adicionar ao arquivo de configuração
@@ -285,8 +290,43 @@ async def add_peer_to_interface(interface_name: str, public_key: str, allowed_ip
                 allowed_ips=allowed_ips
             )
         else:
-            # Peer já existe, atualizar comentários se necessário
+            # Peer já existe, atualizar comentários E AllowedIPs se necessário
             import re
+            
+            # Verificar se o AllowedIPs precisa ser atualizado
+            # Procurar o bloco [Peer] com esta public_key e verificar o AllowedIPs atual
+            peer_section_pattern = rf'(\[Peer\]\s+PublicKey\s*=\s*{re.escape(public_key)}\s+AllowedIPs\s*=\s*)([^\n]+)'
+            peer_section_match = re.search(peer_section_pattern, content, re.MULTILINE)
+            
+            needs_update = False
+            if peer_section_match:
+                current_allowed_ips = peer_section_match.group(2).strip()
+                if current_allowed_ips != allowed_ips:
+                    # Atualizar AllowedIPs no arquivo
+                    updated_content = re.sub(
+                        peer_section_pattern,
+                        rf'\1{allowed_ips}',
+                        content,
+                        flags=re.MULTILINE
+                    )
+                    content = updated_content
+                    needs_update = True
+                    logger.info(f"✅ AllowedIPs do peer {public_key[:16]}... atualizado de '{current_allowed_ips}' para '{allowed_ips}'")
+            else:
+                # Peer existe mas não tem AllowedIPs configurado, adicionar
+                # Procurar [Peer] com esta public_key e adicionar AllowedIPs após PublicKey
+                peer_without_allowed_pattern = rf'(\[Peer\]\s+PublicKey\s*=\s*{re.escape(public_key)}\s+)'
+                if re.search(peer_without_allowed_pattern, content, re.MULTILINE):
+                    updated_content = re.sub(
+                        peer_without_allowed_pattern,
+                        rf'\1AllowedIPs = {allowed_ips}\n',
+                        content,
+                        flags=re.MULTILINE
+                    )
+                    content = updated_content
+                    needs_update = True
+                    logger.info(f"✅ AllowedIPs adicionado ao peer {public_key[:16]}...: '{allowed_ips}'")
+            
             # Construir novos comentários
             new_comments_lines = [
                 "\n# ============================================"
@@ -310,17 +350,20 @@ async def add_peer_to_interface(interface_name: str, public_key: str, allowed_ip
             
             # Procurar bloco de comentários existente antes do [Peer] com esta public_key
             # Padrão: comentários entre # ============================================ e [Peer] seguido de PublicKey = {public_key}
-            pattern = rf'(# ============================================\n(?:# [^\n]+\n)*# Public Key: {re.escape(public_key)}\n# ============================================\n\[Peer\])'
+            comments_pattern = rf'(# ============================================\n(?:# [^\n]+\n)*# Public Key: {re.escape(public_key)}\n# ============================================\n\[Peer\])'
             
             # Substituir comentários antigos pelos novos
-            updated_content = re.sub(pattern, new_comments + "[Peer]", content, flags=re.DOTALL)
-            if updated_content != content:
+            updated_content = re.sub(comments_pattern, new_comments + "[Peer]", content, flags=re.DOTALL)
+            if updated_content != content or needs_update:
                 with open(config_path, 'w') as f:
                     f.write(updated_content)
                 execute_command(f"chmod 600 {config_path}", check=False)
-                logger.info(f"✅ Comentários do peer {public_key[:16]}... atualizados no arquivo {config_path}")
+                if needs_update:
+                    logger.info(f"✅ Peer {public_key[:16]}... atualizado no arquivo {config_path} (AllowedIPs e comentários)")
+                else:
+                    logger.info(f"✅ Comentários do peer {public_key[:16]}... atualizados no arquivo {config_path}")
             else:
-                logger.debug(f"Peer {public_key[:16]}... já existe, comentários já estão atualizados")
+                logger.debug(f"Peer {public_key[:16]}... já existe e está atualizado")
             
             # Atualizar cache em memória mesmo se os comentários não mudaram
             from peer_cache import set_peer_info
