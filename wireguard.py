@@ -216,7 +216,11 @@ async def allocate_vpn_ip(vpn_network_id: str, manual_ip: Optional[str] = None) 
 
 async def add_peer_to_interface(interface_name: str, public_key: str, allowed_ips: str):
     """Adiciona peer à interface WireGuard"""
-    # Adicionar peer via wg set
+    # Verificar se interface está ativa
+    stdout, _, returncode = execute_command(f"wg show {interface_name}", check=False)
+    interface_active = returncode == 0
+    
+    # Adicionar peer via wg set (funciona mesmo se interface não estiver ativa, mas será aplicado quando ativar)
     execute_command(f"wg set {interface_name} peer {public_key} allowed-ips {allowed_ips}")
     
     # Adicionar ao arquivo de configuração
@@ -239,8 +243,16 @@ async def add_peer_to_interface(interface_name: str, public_key: str, allowed_ip
             execute_command(f"chmod 600 {config_path}", check=False)
             logger.info(f"Peer {public_key} adicionado ao arquivo {config_path}")
     
-    # Sincronizar arquivo com interface
-    execute_command(f"wg syncconf {interface_name} {config_path}", check=False)
+    # Sincronizar arquivo com interface (aplica mudanças sem derrubar conexões existentes)
+    if interface_active:
+        # Se interface está ativa, usar syncconf que não derruba conexões
+        execute_command(f"wg syncconf {interface_name} {config_path}", check=False)
+        logger.info(f"✅ Peer {public_key[:16]}... adicionado à interface ativa {interface_name}")
+    else:
+        # Se interface não está ativa, ativar com wg-quick up
+        logger.info(f"Interface {interface_name} não está ativa, ativando...")
+        execute_command(f"wg-quick up {interface_name}", check=False)
+        logger.info(f"✅ Interface {interface_name} ativada com peer {public_key[:16]}...")
 
 
 async def generate_router_config(router: Dict[str, Any], peer: Dict[str, Any], vpn_network: Dict[str, Any], allowed_networks: List[str]) -> str:

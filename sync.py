@@ -7,7 +7,7 @@ import logging
 from typing import Dict, Any, List
 from datetime import datetime
 from config import VPN_SERVER_ENDPOINT, API_C_SHARP_URL, SYNC_INTERVAL_SECONDS, WIREGUARD_CONFIG_DIR
-from wireguard import get_interface_name, remove_interface, ensure_interface_exists
+from wireguard import get_interface_name, remove_interface, ensure_interface_exists, add_peer_to_interface
 from utils import execute_command
 
 logger = logging.getLogger(__name__)
@@ -60,6 +60,9 @@ async def sync_resources_from_api():
             
             # Fazer sincronização completa (de-para)
             await sync_interfaces_with_vpns(new_vpn_networks)
+            
+            # Sincronizar peers dos routers
+            await sync_peers_with_routers(new_routers, new_vpn_networks)
             
             # Atualizar cache
             managed_resources["vpn_networks"] = new_vpn_networks
@@ -230,6 +233,119 @@ async def sync_interfaces_with_vpns(vpn_networks: List[Dict[str, Any]]) -> None:
             
     except Exception as e:
         logger.error(f"Erro ao sincronizar interfaces com VPNs: {e}")
+
+
+async def get_existing_peers(interface_name: str) -> List[str]:
+    """Lista chaves públicas dos peers existentes em uma interface WireGuard"""
+    try:
+        stdout, stderr, returncode = execute_command(f"wg show {interface_name}", check=False)
+        if returncode != 0:
+            return []
+        
+        # Parsear saída do wg show para extrair chaves públicas dos peers
+        # Formato: peer <public_key>
+        #          endpoint: ...
+        #          allowed ips: ...
+        peer_keys = []
+        lines = stdout.strip().split('\n')
+        for line in lines:
+            line = line.strip()
+            if line.startswith('peer '):
+                # Extrair chave pública (peer <key>)
+                parts = line.split()
+                if len(parts) >= 2:
+                    peer_keys.append(parts[1])
+        
+        return peer_keys
+    except Exception as e:
+        logger.error(f"Erro ao listar peers da interface {interface_name}: {e}")
+        return []
+
+
+async def sync_peers_with_routers(routers: List[Dict[str, Any]], vpn_networks: List[Dict[str, Any]]) -> None:
+    """
+    Sincroniza peers dos routers com as interfaces WireGuard.
+    
+    - Se peer existe no banco mas não está na interface → ADICIONA peer
+    - Se peer existe na interface mas não está no banco → REMOVE peer (opcional, pode ser manual)
+    """
+    try:
+        # Criar mapeamento de VPN ID para interface name
+        vpn_to_interface: Dict[str, str] = {}
+        for vpn in vpn_networks:
+            interface_name = get_interface_name(vpn["id"])
+            # Verificar se interface existe
+            stdout, _, returncode = execute_command(f"wg show {interface_name}", check=False)
+            if returncode == 0:
+                vpn_to_interface[vpn["id"]] = interface_name
+        
+        if not vpn_to_interface:
+            logger.debug("Nenhuma interface WireGuard ativa encontrada para sincronizar peers")
+            return
+        
+        # Processar cada router
+        total_peers_added = 0
+        total_peers_skipped = 0
+        
+        for router in routers:
+            router_id = router.get("id")
+            vpn_network_id = router.get("vpn_network_id")
+            peers = router.get("peers", [])
+            
+            if not vpn_network_id or not peers:
+                continue
+            
+            # Verificar se a interface existe para esta VPN
+            if vpn_network_id not in vpn_to_interface:
+                logger.debug(f"Interface não encontrada para VPN {vpn_network_id}, pulando router {router_id}")
+                continue
+            
+            interface_name = vpn_to_interface[vpn_network_id]
+            
+            # Obter peers existentes na interface
+            existing_peer_keys = await get_existing_peers(interface_name)
+            
+            # Adicionar peers que estão no banco mas não na interface
+            for peer in peers:
+                public_key = peer.get("public_key", "").strip()
+                allowed_ips = peer.get("allowed_ips", "").strip()
+                is_enabled = peer.get("is_enabled", True)
+                
+                if not public_key or not allowed_ips:
+                    logger.debug(f"Peer do router {router_id} sem public_key ou allowed_ips, pulando")
+                    continue
+                
+                if not is_enabled:
+                    logger.debug(f"Peer {public_key} está desabilitado, pulando")
+                    continue
+                
+                # Verificar se peer já existe na interface
+                if public_key in existing_peer_keys:
+                    logger.debug(f"Peer {public_key[:16]}... já existe na interface {interface_name}")
+                    total_peers_skipped += 1
+                    continue
+                
+                # Adicionar peer à interface
+                try:
+                    await add_peer_to_interface(interface_name, public_key, allowed_ips)
+                    logger.info(
+                        f"✅ Peer adicionado: router {router_id} -> interface {interface_name} "
+                        f"(IP: {allowed_ips}, Key: {public_key[:16]}...)"
+                    )
+                    total_peers_added += 1
+                except Exception as e:
+                    logger.error(f"❌ Erro ao adicionar peer {public_key[:16]}... à interface {interface_name}: {e}")
+        
+        if total_peers_added > 0 or total_peers_skipped > 0:
+            logger.info(
+                f"📊 Sincronização de peers: {total_peers_added} adicionado(s), "
+                f"{total_peers_skipped} já existente(s)"
+            )
+        else:
+            logger.debug("✅ Sincronização de peers: nenhuma alteração necessária")
+            
+    except Exception as e:
+        logger.error(f"Erro ao sincronizar peers com routers: {e}")
 
 
 async def cleanup_orphan_interfaces(managed_vpn_ids: set) -> None:

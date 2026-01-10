@@ -26,6 +26,7 @@ from wireguard import (
 )
 from status import get_wireguard_status
 from dashboard import get_dashboard_html
+from monitor import background_monitor_loop
 
 # Configurar logging
 logging.basicConfig(
@@ -104,12 +105,18 @@ async def lifespan(app: FastAPI):
     await sync_existing_interfaces()
     
     sync_task = asyncio.create_task(background_sync_loop())
+    monitor_task = asyncio.create_task(background_monitor_loop())
     
     yield
     
     sync_task.cancel()
+    monitor_task.cancel()
     try:
         await sync_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await monitor_task
     except asyncio.CancelledError:
         pass
     logger.info("🛑 Serviço VPN encerrado")
