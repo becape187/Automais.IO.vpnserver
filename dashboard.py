@@ -295,12 +295,22 @@ def get_dashboard_html() -> str:
                         let handshake = 'Nunca';
                         if (peer.latest_handshake) {{
                             try {{
-                                // Criar objeto Date a partir da string ISO (pode ter 'Z' no final para UTC)
-                                const handshakeDate = new Date(peer.latest_handshake);
+                                // Garantir que a string ISO tem 'Z' no final para indicar UTC
+                                let isoString = peer.latest_handshake;
+                                // Se não termina com 'Z' e não tem offset de timezone, adicionar 'Z'
+                                if (!isoString.endsWith('Z') && !isoString.match(/[+-]\d{2}:\d{2}$/)) {{
+                                    isoString = isoString + 'Z';
+                                }}
+                                
+                                // Criar objeto Date a partir da string ISO
+                                // O 'Z' no final força interpretação como UTC
+                                const handshakeDate = new Date(isoString);
+                                
                                 // Verificar se a data é válida
                                 if (!isNaN(handshakeDate.getTime())) {{
                                     // Formatar com timezone local do navegador
-                                    // Opções: data completa com hora e timezone
+                                    // O JavaScript automaticamente converte UTC para o timezone local
+                                    // O método toLocaleString já faz a conversão correta
                                     handshake = handshakeDate.toLocaleString('pt-BR', {{
                                         day: '2-digit',
                                         month: '2-digit',
@@ -310,9 +320,11 @@ def get_dashboard_html() -> str:
                                         second: '2-digit',
                                         timeZoneName: 'short'
                                     }});
+                                }} else {{
+                                    console.warn('Data inválida:', peer.latest_handshake, 'ISO processada:', isoString);
                                 }}
                             }} catch (e) {{
-                                console.error('Erro ao formatar handshake:', e);
+                                console.error('Erro ao formatar handshake:', e, 'String original:', peer.latest_handshake);
                                 handshake = 'Erro ao formatar';
                             }}
                         }}

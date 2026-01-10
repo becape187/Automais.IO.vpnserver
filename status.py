@@ -212,7 +212,10 @@ async def get_wireguard_status() -> Dict[str, Any]:
                         if handshake_timestamp and handshake_timestamp > 0:
                             # Converter timestamp Unix para datetime UTC em formato ISO 8601
                             # O 'Z' indica UTC, o navegador converterá para o timezone local automaticamente
+                            # IMPORTANTE: datetime.utcfromtimestamp() já retorna UTC, então adicionamos 'Z' para indicar UTC
                             handshake_datetime = datetime.utcfromtimestamp(handshake_timestamp).isoformat() + 'Z'
+                            # Log para debug - verificar se o timestamp está correto
+                            logger.debug(f"Handshake timestamp: {handshake_timestamp} -> ISO: {handshake_datetime}")
                             # Considerar online se handshake foi nos últimos 3 minutos (mais tolerante)
                             current_timestamp = datetime.utcnow().timestamp()
                             time_diff = current_timestamp - handshake_timestamp
