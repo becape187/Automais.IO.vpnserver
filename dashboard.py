@@ -201,7 +201,7 @@ def get_dashboard_html() -> str:
 
     <script>
         let refreshInterval;
-        const REFRESH_INTERVAL = 3000; // 3 segundos
+        const REFRESH_INTERVAL = 1000; // 1 segundo (atualização mais rápida quando na página)
 
         async function fetchStatus() {{
             try {{
@@ -367,6 +367,23 @@ def get_dashboard_html() -> str:
 
         // Atualizar ao focar na janela
         window.addEventListener('focus', fetchStatus);
+        
+        // Pausar atualização quando a página não está visível (economiza recursos)
+        document.addEventListener('visibilitychange', function() {{
+            if (document.hidden) {{
+                // Página não está visível, pausar atualização
+                if (refreshInterval) {{
+                    clearInterval(refreshInterval);
+                    refreshInterval = null;
+                }}
+            }} else {{
+                // Página está visível, retomar atualização
+                if (!refreshInterval) {{
+                    fetchStatus(); // Atualizar imediatamente
+                    refreshInterval = setInterval(fetchStatus, REFRESH_INTERVAL);
+                }}
+            }}
+        }});
     </script>
 </body>
 </html>

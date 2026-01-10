@@ -361,27 +361,32 @@ def _get_peer_info_from_config(interface_name: str, public_key: str) -> Dict[str
         
         # Procurar o bloco de comentários antes do peer com esta public_key
         # Padrão: comentários antes de [Peer] seguido de PublicKey = {public_key}
-        pattern = rf'# Router: (.+?)\n.*?# Router ID: (.+?)\n.*?# VPN Network: (.+?)\n.*?# VPN Network ID: (.+?)\n.*?\[Peer\].*?PublicKey = {re.escape(public_key)}.*?AllowedIPs = ([^\n]+)'
+        # Pode ter Peer IP nos comentários também
+        pattern = rf'# Router: (.+?)\n.*?# Router ID: (.+?)\n.*?# VPN Network: (.+?)\n.*?# VPN Network ID: (.+?)\n.*?(?:# Peer IP: ([^\n]+)\n)?.*?\[Peer\].*?PublicKey = {re.escape(public_key)}.*?AllowedIPs = ([^\n]+)'
         match = re.search(pattern, content, re.DOTALL)
         
         peer_ip = None
         if match:
-            # Tentar extrair o IP do AllowedIPs
-            allowed_ips_line = match.group(5).strip() if len(match.groups()) >= 5 else ""
-            if allowed_ips_line:
-                # Pegar o primeiro IP da lista
-                first_ip = allowed_ips_line.split(',')[0].strip()
-                # Remover o prefixo CIDR se houver
-                if '/' in first_ip:
-                    peer_ip = first_ip.split('/')[0].strip()
-                else:
-                    peer_ip = first_ip
+            # Tentar extrair o IP dos comentários primeiro (mais confiável)
+            if len(match.groups()) >= 5 and match.group(5):
+                peer_ip = match.group(5).strip()
+            else:
+                # Fallback: extrair do AllowedIPs
+                allowed_ips_line = match.group(6).strip() if len(match.groups()) >= 6 else ""
+                if allowed_ips_line:
+                    # Pegar o primeiro IP da lista
+                    first_ip = allowed_ips_line.split(',')[0].strip()
+                    # Remover o prefixo CIDR se houver
+                    if '/' in first_ip:
+                        peer_ip = first_ip.split('/')[0].strip()
+                    else:
+                        peer_ip = first_ip
             
             result = {
-                "router_name": match.group(1).strip(),
-                "router_id": match.group(2).strip(),
-                "vpn_network_name": match.group(3).strip(),
-                "vpn_network_id": match.group(4).strip()
+                "router_name": match.group(1).strip() if match.group(1) else None,
+                "router_id": match.group(2).strip() if match.group(2) else None,
+                "vpn_network_name": match.group(3).strip() if match.group(3) else None,
+                "vpn_network_id": match.group(4).strip() if match.group(4) else None
             }
             if peer_ip:
                 result["peer_ip"] = peer_ip

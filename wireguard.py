@@ -227,14 +227,15 @@ async def add_peer_to_interface(interface_name: str, public_key: str, allowed_ip
     config_path = f"{WIREGUARD_CONFIG_DIR}/{interface_name}.conf"
     if os.path.exists(config_path):
         with open(config_path, 'r') as f:
-            lines = f.readlines()
+            content = f.read()
         
         # Verificar se peer já existe
-        peer_exists = any(public_key in line for line in lines)
+        peer_exists = public_key in content
         
         if not peer_exists:
+            # Peer não existe, adicionar novo
             with open(config_path, 'a') as f:
-                # Adicionar comentários identificadores
+                # Adicionar comentários identificadores com informações completas
                 f.write(f"\n# ============================================\n")
                 if router_name:
                     f.write(f"# Router: {router_name}\n")
@@ -244,6 +245,13 @@ async def add_peer_to_interface(interface_name: str, public_key: str, allowed_ip
                     f.write(f"# VPN Network: {vpn_network_name}\n")
                 if vpn_network_id:
                     f.write(f"# VPN Network ID: {vpn_network_id}\n")
+                # Adicionar IP configurado do peer
+                if allowed_ips:
+                    # Extrair IP do allowed_ips (pode ser uma rede como 10.222.111.0/24)
+                    peer_ip = allowed_ips.split(',')[0].strip()
+                    if '/' in peer_ip:
+                        peer_ip = peer_ip.split('/')[0]
+                    f.write(f"# Peer IP: {peer_ip}\n")
                 f.write(f"# Public Key: {public_key}\n")
                 f.write(f"# ============================================\n")
                 f.write(f"[Peer]\n")
@@ -253,6 +261,43 @@ async def add_peer_to_interface(interface_name: str, public_key: str, allowed_ip
             
             execute_command(f"chmod 600 {config_path}", check=False)
             logger.info(f"Peer {public_key} adicionado ao arquivo {config_path}")
+        else:
+            # Peer já existe, atualizar comentários se necessário
+            import re
+            # Construir novos comentários
+            new_comments_lines = [
+                "\n# ============================================"
+            ]
+            if router_name:
+                new_comments_lines.append(f"# Router: {router_name}")
+            if router_id:
+                new_comments_lines.append(f"# Router ID: {router_id}")
+            if vpn_network_name:
+                new_comments_lines.append(f"# VPN Network: {vpn_network_name}")
+            if vpn_network_id:
+                new_comments_lines.append(f"# VPN Network ID: {vpn_network_id}")
+            if allowed_ips:
+                peer_ip = allowed_ips.split(',')[0].strip()
+                if '/' in peer_ip:
+                    peer_ip = peer_ip.split('/')[0]
+                new_comments_lines.append(f"# Peer IP: {peer_ip}")
+            new_comments_lines.append(f"# Public Key: {public_key}")
+            new_comments_lines.append("# ============================================")
+            new_comments = "\n".join(new_comments_lines) + "\n"
+            
+            # Procurar bloco de comentários existente antes do [Peer] com esta public_key
+            # Padrão: comentários entre # ============================================ e [Peer] seguido de PublicKey = {public_key}
+            pattern = rf'(# ============================================\n(?:# [^\n]+\n)*# Public Key: {re.escape(public_key)}\n# ============================================\n\[Peer\])'
+            
+            # Substituir comentários antigos pelos novos
+            updated_content = re.sub(pattern, new_comments + "[Peer]", content, flags=re.DOTALL)
+            if updated_content != content:
+                with open(config_path, 'w') as f:
+                    f.write(updated_content)
+                execute_command(f"chmod 600 {config_path}", check=False)
+                logger.info(f"✅ Comentários do peer {public_key[:16]}... atualizados no arquivo {config_path}")
+            else:
+                logger.debug(f"Peer {public_key[:16]}... já existe, comentários já estão atualizados")
     
     # Sincronizar arquivo com interface (aplica mudanças sem derrubar conexões existentes)
     if interface_active:
