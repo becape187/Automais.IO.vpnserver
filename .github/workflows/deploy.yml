@@ -185,39 +185,13 @@ jobs:
               ls -la deploy/ || echo "Diretório deploy não existe"
               echo "Procurando arquivo routeros.service em outros locais:"
               find . -name "routeros.service" -type f 2>/dev/null || echo "Arquivo não encontrado em nenhum lugar"
-              
-              # Tentar criar o arquivo se não existir (fallback)
-              echo "⚠️  Tentando criar routeros.service manualmente..."
-              sudo tee /etc/systemd/system/routeros.service > /dev/null << 'EOF'
-[Unit]
-Description=RouterOS WebSocket Service - Gerenciamento RouterOS via WebSocket
-After=network.target vpnserverio.service
-Requires=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/root/automais.io/vpnserver.io
-ExecStart=/root/automais.io/vpnserver.io/venv/bin/python3 /root/automais.io/vpnserver.io/routeros_websocket.py
-Restart=always
-RestartSec=10
-KillSignal=SIGINT
-SyslogIdentifier=routeros-websocket
-
-# Timeouts
-TimeoutStartSec=60
-TimeoutStopSec=30
-TimeoutAbortSec=10
-
-# Variáveis de ambiente
-Environment="PYTHONUNBUFFERED=1"
-EnvironmentFile=/root/automais.io/vpnserver.env
-
-[Install]
-WantedBy=multi-user.target
-EOF
-              sudo chmod 644 /etc/systemd/system/routeros.service
-              echo "✓ routeros.service criado manualmente"
+              echo ""
+              echo "⚠️  Para instalar manualmente, execute no servidor:"
+              echo "    cd /root/automais.io/vpnserver.io"
+              echo "    sudo cp deploy/routeros.service /etc/systemd/system/"
+              echo "    sudo systemctl daemon-reload"
+              echo "    sudo systemctl enable routeros.service"
+              echo "    sudo systemctl start routeros.service"
             fi
             
             # Recarregar systemd (caso os arquivos tenham sido atualizados)
