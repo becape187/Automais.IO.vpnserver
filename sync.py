@@ -4,6 +4,7 @@ Sincronização de recursos com a API C#
 import os
 import httpx
 import logging
+import tempfile
 from typing import Dict, Any, List
 from datetime import datetime
 from config import VPN_SERVER_ENDPOINT, API_C_SHARP_URL, SYNC_INTERVAL_SECONDS, WIREGUARD_CONFIG_DIR
@@ -319,16 +320,47 @@ async def sync_peers_with_routers(routers: List[Dict[str, Any]], vpn_networks: L
                         if '[Interface]' not in file_content or 'PrivateKey =' not in file_content:
                             raise ValueError(f"Arquivo {config_path} está mal formatado")
                     
-                    # Usar wg syncconf para aplicar mudanças sem derrubar conexões
-                    stdout, stderr, returncode = execute_command(f"wg syncconf {interface_name} {config_path}", check=False)
-                    if returncode != 0:
-                        logger.warning(f"wg syncconf retornou erro: {stderr}. Tentando recarregar interface...")
-                        # Se syncconf falhar, recarregar interface
-                        execute_command(f"wg-quick down {interface_name}", check=False)
-                        execute_command(f"wg-quick up {interface_name}", check=False)
-                        logger.info(f"✅ Interface {interface_name} recarregada (syncconf falhou)")
-                    else:
-                        logger.info(f"✅ Interface {interface_name} sincronizada com arquivo atualizado ({peers_count} peer(s))")
+                    # IMPORTANTE: wg syncconf só aceita seções [Peer], não aceita [Interface]
+                    # Usar wg-quick strip para extrair apenas os peers e passar para wg syncconf
+                    # Isso atualiza os peers sem derrubar conexões existentes
+                    tmp_path = None
+                    try:
+                        # Extrair apenas peers usando wg-quick strip
+                        strip_stdout, strip_stderr, strip_returncode = execute_command(
+                            f"wg-quick strip {config_path}",
+                            check=False
+                        )
+                        
+                        if strip_returncode != 0:
+                            raise ValueError(f"wg-quick strip falhou: {strip_stderr}")
+                        
+                        # Criar arquivo temporário com apenas os peers
+                        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.conf', dir='/tmp') as tmp_file:
+                            tmp_path = tmp_file.name
+                            tmp_file.write(strip_stdout)
+                            tmp_file.flush()
+                        
+                        # Sincronizar usando arquivo temporário (apenas peers, sem [Interface])
+                        stdout, stderr, returncode = execute_command(
+                            f"wg syncconf {interface_name} {tmp_path}",
+                            check=False
+                        )
+                        
+                        if returncode != 0:
+                            logger.warning(f"wg syncconf retornou erro: {stderr}. Tentando recarregar interface...")
+                            # Se syncconf falhar, recarregar interface (vai derrubar conexões por alguns segundos)
+                            execute_command(f"wg-quick down {interface_name}", check=False)
+                            execute_command(f"wg-quick up {interface_name}", check=False)
+                            logger.info(f"✅ Interface {interface_name} recarregada (syncconf falhou)")
+                        else:
+                            logger.info(f"✅ Interface {interface_name} sincronizada com arquivo atualizado ({peers_count} peer(s))")
+                    finally:
+                        # Remover arquivo temporário se foi criado
+                        if tmp_path and os.path.exists(tmp_path):
+                            try:
+                                os.unlink(tmp_path)
+                            except:
+                                pass
                     
                     total_files_updated += 1
                     total_peers_count += peers_count
