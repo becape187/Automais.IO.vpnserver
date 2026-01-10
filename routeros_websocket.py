@@ -12,16 +12,25 @@ from concurrent.futures import ThreadPoolExecutor
 
 import websockets
 from websockets.server import WebSocketServerProtocol
-from routeros_api import RouterOsApi
-from routeros_api.exceptions import RouterOsApiConnectionError, RouterOsApiCommunicationError
+# Importação do routeros-api
+# O pacote routeros-api versão 0.18.0 usa routeros_api.connect() ao invés de RouterOsApi()
+import routeros_api
+try:
+    from routeros_api.exceptions import RouterOsApiConnectionError, RouterOsApiCommunicationError
+except ImportError:
+    # Se as exceções não existirem, criar classes vazias
+    class RouterOsApiConnectionError(Exception):
+        pass
+    class RouterOsApiCommunicationError(Exception):
+        pass
 
 from api_client import get_router_from_api, get_router_static_routes_from_api, get_router_wireguard_peers_from_api
 from config import API_C_SHARP_URL
 
 logger = logging.getLogger(__name__)
 
-# Cache de conexões RouterOS (router_id -> RouterOsApi)
-router_connections: Dict[str, RouterOsApi] = {}
+# Cache de conexões RouterOS (router_id -> routeros_api connection)
+router_connections: Dict[str, 'routeros_api.Connection'] = {}
 
 # Thread pool para executar operações RouterOS (não assíncrono)
 executor = ThreadPoolExecutor(max_workers=10)
@@ -45,7 +54,7 @@ def extract_route_id_from_comment(comment: Optional[str]) -> Optional[str]:
     return match.group(1) if match else None
 
 
-def _get_router_connection_sync(router_id: str, router_ip: str, username: str, password: str) -> Optional[RouterOsApi]:
+def _get_router_connection_sync(router_id: str, router_ip: str, username: str, password: str):
     """Obtém ou cria conexão RouterOS API (síncrono)"""
     try:
         # Verificar se já existe conexão em cache
@@ -58,8 +67,8 @@ def _get_router_connection_sync(router_id: str, router_ip: str, username: str, p
                 # Conexão inválida, remover do cache
                 del router_connections[router_id]
         
-        # Criar nova conexão
-        api = RouterOsApi(router_ip, username=username, password=password)
+        # Criar nova conexão usando routeros_api.connect()
+        api = routeros_api.connect(router_ip, username=username, password=password)
         router_connections[router_id] = api
         logger.info(f"Conexão RouterOS estabelecida: {router_id} -> {router_ip}")
         return api
@@ -68,7 +77,7 @@ def _get_router_connection_sync(router_id: str, router_ip: str, username: str, p
         return None
 
 
-async def get_router_connection(router_id: str, router_ip: str, username: str, password: str) -> Optional[RouterOsApi]:
+async def get_router_connection(router_id: str, router_ip: str, username: str, password: str):
     """Obtém ou cria conexão RouterOS API (assíncrono wrapper)"""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(executor, _get_router_connection_sync, router_id, router_ip, username, password)
