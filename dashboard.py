@@ -12,7 +12,7 @@ def get_dashboard_html() -> str:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WireGuard Dashboard - {VPN_SERVER_ENDPOINT or "VPN Server"}</title>
+    <title>Automais.IO VPN Dashboard - {VPN_SERVER_ENDPOINT or "VPN Server"}</title>
     <style>
         * {{
             margin: 0;
@@ -179,7 +179,7 @@ def get_dashboard_html() -> str:
     <div class="container">
         <div class="header">
             <div>
-                <h1>🔒 WireGuard Dashboard</h1>
+                <h1>🔒 Automais.IO VPN Dashboard</h1>
                 <p style="color: #666; margin-top: 5px;">Endpoint: <strong>{VPN_SERVER_ENDPOINT or "Não configurado"}</strong></p>
             </div>
             <div class="refresh-indicator" id="refreshIndicator">
@@ -268,11 +268,18 @@ def get_dashboard_html() -> str:
                 const onlinePeers = iface.peers.filter(p => p.status === 'online').length;
                 const totalPeers = iface.peers.length;
                 
+                // Obter nome da VPN (pode estar na interface ou no primeiro peer)
+                const vpnName = iface.vpn_network_name || (iface.peers.length > 0 && iface.peers[0].vpn_network_name) || '';
+                const interfaceDisplayName = vpnName ? vpnName + ' - ' + iface.name : iface.name;
+                
                 let interfaceHtml = `
                     <div class="interface">
                         <div class="interface-header">
                             <div>
-                                <span class="interface-name">${{iface.name}}</span>
+                                <div style="font-weight: bold; font-size: 18px; color: #667eea; margin-bottom: 4px;">
+                                    ${{vpnName || 'VPN'}}
+                                </div>
+                                <span class="interface-name" style="font-size: 14px; color: #666;">${{iface.name}}</span>
                                 <span class="status-badge ${{onlinePeers > 0 ? 'status-online' : 'status-offline'}}" style="margin-left: 10px;">
                                     ${{onlinePeers}}/${{totalPeers}} Online
                                 </span>
@@ -293,6 +300,7 @@ def get_dashboard_html() -> str:
                         
                         // Formatar handshake considerando timezone local
                         let handshake = 'Nunca';
+                        let secondsAgo = null;
                         if (peer.latest_handshake) {{
                             try {{
                                 // Garantir que a string ISO tem 'Z' no final para indicar UTC
@@ -308,6 +316,11 @@ def get_dashboard_html() -> str:
                                 
                                 // Verificar se a data é válida
                                 if (!isNaN(handshakeDate.getTime())) {{
+                                    // Calcular segundos desde o handshake
+                                    const now = new Date();
+                                    const diffMs = now.getTime() - handshakeDate.getTime();
+                                    secondsAgo = Math.floor(diffMs / 1000);
+                                    
                                     // Formatar com timezone local do navegador
                                     // O JavaScript automaticamente converte UTC para o timezone local
                                     // O método toLocaleString já faz a conversão correta
@@ -363,6 +376,7 @@ def get_dashboard_html() -> str:
                                     <div class="peer-info-item">
                                         <strong>Último Handshake:</strong><br>
                                         ${{handshake}}
+                                        ${{secondsAgo !== null ? `<br><small style="color: #999;">Há ${{secondsAgo}} segundo(s)</small>` : ''}}
                                     </div>
                                     <div class="peer-info-item">
                                         <strong>Download:</strong><br>

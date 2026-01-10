@@ -41,7 +41,9 @@ async def get_wireguard_status() -> Dict[str, Any]:
                     "name": interface_name,
                     "public_key": "",
                     "listen_port": 0,
-                    "peers": []
+                    "peers": [],
+                    "vpn_network_name": None,
+                    "vpn_network_id": None
                 }
         else:
             # Parsear saída do dump
@@ -70,7 +72,9 @@ async def get_wireguard_status() -> Dict[str, Any]:
                                 "name": interface_name,
                                 "public_key": public_key,
                                 "listen_port": listen_port,
-                                "peers": []
+                                "peers": [],
+                                "vpn_network_name": None,
+                                "vpn_network_id": None
                             }
                         current_interface = interface_name
                     except (ValueError, IndexError):
@@ -106,7 +110,9 @@ async def get_wireguard_status() -> Dict[str, Any]:
                             "name": interface_name,
                             "public_key": "",  # Interface não tem public_key própria no dump do peer
                             "listen_port": 51820,  # Porta padrão
-                            "peers": []
+                            "peers": [],
+                            "vpn_network_name": None,
+                            "vpn_network_id": None
                         }
                     current_interface = interface_name
                     try:
@@ -298,6 +304,11 @@ async def get_wireguard_status() -> Dict[str, Any]:
                             "vpn_network_id": peer_info.get("vpn_network_id")
                         }
                         interfaces_dict[current_interface]["peers"].append(peer)
+                        
+                        # Adicionar nome da VPN à interface se ainda não tiver
+                        if peer_info.get("vpn_network_name") and not interfaces_dict[current_interface].get("vpn_network_name"):
+                            interfaces_dict[current_interface]["vpn_network_name"] = peer_info.get("vpn_network_name")
+                            interfaces_dict[current_interface]["vpn_network_id"] = peer_info.get("vpn_network_id")
                     except (ValueError, IndexError) as e:
                         logger.warning(f"Erro ao parsear linha de peer: {line}, Erro: {e}")
                         continue
