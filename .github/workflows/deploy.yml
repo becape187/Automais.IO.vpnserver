@@ -17,8 +17,14 @@ jobs:
       
       - name: Create deployment package
         run: |
+          # Verificar arquivos de serviço antes de criar o pacote
+          echo "Verificando arquivos de serviço antes de criar pacote:"
+          ls -la deploy/*.service || echo "Aviso: Nenhum arquivo .service encontrado em deploy/"
+          echo ""
+          
           # Criar arquivo tar com todos os arquivos (exceto .git, venv, etc)
           # Criar em diretório temporário para evitar conflito "file changed as we read it"
+          echo "Criando pacote de deploy..."
           tar -czf /tmp/deploy.tar.gz \
             --exclude='.git' \
             --exclude='.github' \
@@ -29,8 +35,14 @@ jobs:
             --exclude='.DS_Store' \
             --exclude='*.tar.gz' \
             .
+          
+          # Verificar se os arquivos de serviço estão no tar
+          echo "Verificando conteúdo do pacote:"
+          tar -tzf /tmp/deploy.tar.gz | grep -E "deploy/.*\.service" || echo "Aviso: Nenhum arquivo .service encontrado no pacote"
+          
           # Mover para diretório atual
           mv /tmp/deploy.tar.gz ./deploy.tar.gz
+          echo "✓ Pacote criado: deploy.tar.gz"
       
       - name: Copy files to server
         uses: appleboy/scp-action@master
@@ -66,6 +78,14 @@ jobs:
             echo "Extraindo arquivos..."
             tar -xzf deploy.tar.gz
             rm deploy.tar.gz
+            
+            echo "Verificando arquivos extraídos..."
+            echo "Conteúdo do diretório deploy:"
+            ls -la deploy/ || echo "Diretório deploy não encontrado"
+            echo ""
+            echo "Verificando se arquivos de serviço existem:"
+            [ -f "deploy/vpnserverio.service" ] && echo "✓ deploy/vpnserverio.service existe" || echo "✗ deploy/vpnserverio.service NÃO existe"
+            [ -f "deploy/routeros.service" ] && echo "✓ deploy/routeros.service existe" || echo "✗ deploy/routeros.service NÃO existe"
             
             echo "📦 Instalando/atualizando dependências Python..."
             
@@ -135,44 +155,132 @@ jobs:
               echo "✓ Arquivo vpnserver.env encontrado"
             fi
             
-            # Copiar arquivo de serviço systemd se existir
+            # Copiar arquivos de serviço systemd se existirem
+            echo "📦 Configurando serviços systemd..."
+            echo "Diretório atual: $(pwd)"
+            echo "Verificando arquivos antes de copiar:"
+            ls -la deploy/*.service 2>/dev/null || echo "Nenhum arquivo .service encontrado em deploy/"
+            
+            # Serviço VPN Server (main)
             if [ -f "deploy/vpnserverio.service" ]; then
-              echo "Copiando arquivo de serviço systemd..."
-              sudo cp deploy/vpnserverio.service /etc/systemd/system/vpnserverio.service
+              echo "✓ Copiando vpnserverio.service..."
+              sudo cp -v deploy/vpnserverio.service /etc/systemd/system/vpnserverio.service
               sudo chmod 644 /etc/systemd/system/vpnserverio.service
+              echo "✓ vpnserverio.service copiado com sucesso"
+            else
+              echo "⚠️  ERRO: Arquivo deploy/vpnserverio.service não encontrado"
+              echo "Conteúdo do diretório deploy:"
+              ls -la deploy/ || echo "Diretório deploy não existe"
             fi
             
-            echo "Verificando serviço systemd..."
+            # Serviço RouterOS WebSocket
+            if [ -f "deploy/routeros.service" ]; then
+              echo "✓ Copiando routeros.service..."
+              sudo cp -v deploy/routeros.service /etc/systemd/system/routeros.service
+              sudo chmod 644 /etc/systemd/system/routeros.service
+              echo "✓ routeros.service copiado com sucesso"
+            else
+              echo "⚠️  ERRO: Arquivo deploy/routeros.service não encontrado"
+              echo "Conteúdo do diretório deploy:"
+              ls -la deploy/ || echo "Diretório deploy não existe"
+              echo "Procurando arquivo routeros.service em outros locais:"
+              find . -name "routeros.service" -type f 2>/dev/null || echo "Arquivo não encontrado em nenhum lugar"
+              
+              # Tentar criar o arquivo se não existir (fallback)
+              echo "⚠️  Tentando criar routeros.service manualmente..."
+              sudo tee /etc/systemd/system/routeros.service > /dev/null << 'EOF'
+[Unit]
+Description=RouterOS WebSocket Service - Gerenciamento RouterOS via WebSocket
+After=network.target vpnserverio.service
+Requires=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/automais.io/vpnserver.io
+ExecStart=/root/automais.io/vpnserver.io/venv/bin/python3 /root/automais.io/vpnserver.io/routeros_websocket.py
+Restart=always
+RestartSec=10
+KillSignal=SIGINT
+SyslogIdentifier=routeros-websocket
+
+# Timeouts
+TimeoutStartSec=60
+TimeoutStopSec=30
+TimeoutAbortSec=10
+
+# Variáveis de ambiente
+Environment="PYTHONUNBUFFERED=1"
+EnvironmentFile=/root/automais.io/vpnserver.env
+
+[Install]
+WantedBy=multi-user.target
+EOF
+              sudo chmod 644 /etc/systemd/system/routeros.service
+              echo "✓ routeros.service criado manualmente"
+            fi
+            
+            # Recarregar systemd (caso os arquivos tenham sido atualizados)
+            sudo systemctl daemon-reload
+            
+            # Configurar e iniciar vpnserverio.service
+            echo ""
+            echo "🔧 Configurando vpnserverio.service..."
             if systemctl list-unit-files | grep -q vpnserverio.service; then
-              echo "✓ Serviço encontrado"
+              echo "✓ Serviço vpnserverio encontrado"
               
               # Verificar se está habilitado
               if systemctl is-enabled vpnserverio.service >/dev/null 2>&1; then
-                echo "✓ Serviço está habilitado"
+                echo "✓ Serviço vpnserverio está habilitado"
               else
-                echo "Habilitando serviço..."
+                echo "Habilitando vpnserverio.service..."
                 sudo systemctl enable vpnserverio.service || echo "Aviso: Erro ao habilitar"
               fi
               
-              # Recarregar systemd (caso o arquivo tenha sido atualizado)
-              sudo systemctl daemon-reload
-              
-              echo "Reiniciando serviço..."
+              echo "Reiniciando vpnserverio.service..."
               sudo systemctl restart vpnserverio.service
               
               # Aguardar um pouco e verificar status
               sleep 3
-              echo "Status do serviço:"
+              echo "Status do vpnserverio.service:"
               sudo systemctl status vpnserverio.service --no-pager || true
             else
               echo "⚠️  Serviço vpnserverio.service não encontrado"
-              echo "Certifique-se de que o serviço foi criado em /etc/systemd/system/vpnserverio.service"
-              echo ""
               echo "Para criar o serviço manualmente:"
               echo "  sudo cp deploy/vpnserverio.service /etc/systemd/system/"
               echo "  sudo systemctl daemon-reload"
               echo "  sudo systemctl enable vpnserverio.service"
               echo "  sudo systemctl start vpnserverio.service"
+            fi
+            
+            # Configurar e iniciar routeros.service
+            echo ""
+            echo "🔧 Configurando routeros.service..."
+            if systemctl list-unit-files | grep -q routeros.service; then
+              echo "✓ Serviço routeros encontrado"
+              
+              # Verificar se está habilitado
+              if systemctl is-enabled routeros.service >/dev/null 2>&1; then
+                echo "✓ Serviço routeros está habilitado"
+              else
+                echo "Habilitando routeros.service..."
+                sudo systemctl enable routeros.service || echo "Aviso: Erro ao habilitar"
+              fi
+              
+              echo "Reiniciando routeros.service..."
+              sudo systemctl restart routeros.service
+              
+              # Aguardar um pouco e verificar status
+              sleep 3
+              echo "Status do routeros.service:"
+              sudo systemctl status routeros.service --no-pager || true
+            else
+              echo "⚠️  Serviço routeros.service não encontrado"
+              echo "Para criar o serviço manualmente:"
+              echo "  sudo cp deploy/routeros.service /etc/systemd/system/"
+              echo "  sudo systemctl daemon-reload"
+              echo "  sudo systemctl enable routeros.service"
+              echo "  sudo systemctl start routeros.service"
             fi
             
             echo "=== Deploy concluído ==="

@@ -24,21 +24,29 @@ Adicione os seguintes secrets (os mesmos do repositório server.io):
 - **Valor:** Porta SSH (padrão: 22)
 - **Mesmo valor usado no server.io**
 
-## 2. Configurar Serviço Systemd (Primeira Vez)
+## 2. Configurar Serviços Systemd (Primeira Vez)
 
-Após o primeiro deploy, configure o serviço:
+Após o primeiro deploy, configure os serviços:
 
 ```bash
-# No servidor
+# No servidor - Copiar ambos os serviços
 sudo cp /root/automais.io/vpnserver.io/deploy/vpnserverio.service /etc/systemd/system/
+sudo cp /root/automais.io/vpnserver.io/deploy/routeros.service /etc/systemd/system/
+
+# Recarregar systemd
 sudo systemctl daemon-reload
+
+# Habilitar e iniciar serviços
 sudo systemctl enable vpnserverio.service
+sudo systemctl enable routeros.service
 sudo systemctl start vpnserverio.service
+sudo systemctl start routeros.service
 ```
 
 **Editar variáveis de ambiente:**
 
 ```bash
+# Editar serviço principal
 sudo nano /etc/systemd/system/vpnserverio.service
 ```
 
@@ -47,6 +55,8 @@ Ajuste conforme necessário:
 - `API_C_SHARP_URL` - URL da API C# (ex: `http://localhost:5000`)
 - `PORT` - Porta do serviço (padrão: 8000)
 
+**Nota:** O `routeros.service` usa o mesmo arquivo de ambiente (`/root/automais.io/vpnserver.env`).
+
 ## 3. Como Funciona o Deploy
 
 No GitHub Actions, o workflow vai:
@@ -54,8 +64,8 @@ No GitHub Actions, o workflow vai:
 2. ✅ Criar pacote tar.gz
 3. ✅ Copiar arquivos para `/root/automais.io/vpnserver.io/`
 4. ✅ Instalar dependências Python
-5. ✅ Copiar arquivo de serviço systemd
-6. ✅ Reiniciar serviço vpnserverio.service
+5. ✅ Copiar arquivos de serviço systemd (vpnserverio.service e routeros.service)
+6. ✅ Reiniciar serviços vpnserverio.service e routeros.service
 
 ## 4. Executar Deploy
 
@@ -74,8 +84,9 @@ ssh root@automais.io
 # Verificar arquivos
 ls -la ~/automais.io/vpnserver.io/
 
-# Verificar serviço (se configurado)
+# Verificar serviços (se configurados)
 sudo systemctl status vpnserverio.service
+sudo systemctl status routeros.service
 ```
 
 ## Troubleshooting
@@ -88,10 +99,15 @@ sudo systemctl status vpnserverio.service
 - Verifique permissões: `chmod 755 /root/automais.io/vpnserver.io`
 - Verifique logs do GitHub Actions
 
-### Serviço não reinicia
-- O workflow procura por `vpnserverio.service`
+### Serviços não reiniciam
+- O workflow procura por `vpnserverio.service` e `routeros.service`
 - Se não encontrar, apenas copia arquivos (sem reiniciar)
-- Configure o serviço na primeira vez conforme seção 2 acima
+- Configure os serviços na primeira vez conforme seção 2 acima
+- Execute manualmente se necessário:
+  ```bash
+  sudo systemctl restart vpnserverio.service
+  sudo systemctl restart routeros.service
+  ```
 
 ### Erro ao instalar dependências
 - Verifique se Python 3 está instalado: `python3 --version`

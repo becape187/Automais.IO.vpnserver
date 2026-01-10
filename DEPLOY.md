@@ -15,25 +15,34 @@ Configure os seguintes secrets no repositório GitHub:
 - `SERVER_PASSWORD` - Senha do usuário SSH
 - `SERVER_PORT` - Porta SSH (opcional, padrão: 22)
 
-### 2. Configurar Serviço Systemd
+### 2. Configurar Serviços Systemd
 
-O arquivo de serviço está em `deploy/vpnserverio.service`. 
+Existem dois serviços systemd:
+
+1. **vpnserverio.service** - Serviço principal (API FastAPI)
+2. **routeros.service** - Serviço WebSocket para gerenciamento RouterOS
+
+Os arquivos de serviço estão em `deploy/vpnserverio.service` e `deploy/routeros.service`.
 
 **No servidor, após o primeiro deploy:**
 
 ```bash
-# Copiar arquivo de serviço
+# Copiar arquivos de serviço
 sudo cp /root/automais.io/vpnserver.io/deploy/vpnserverio.service /etc/systemd/system/
+sudo cp /root/automais.io/vpnserver.io/deploy/routeros.service /etc/systemd/system/
 
 # Recarregar systemd
 sudo systemctl daemon-reload
 
-# Habilitar e iniciar serviço
+# Habilitar e iniciar serviços
 sudo systemctl enable vpnserverio.service
+sudo systemctl enable routeros.service
 sudo systemctl start vpnserverio.service
+sudo systemctl start routeros.service
 
 # Verificar status
 sudo systemctl status vpnserverio.service
+sudo systemctl status routeros.service
 ```
 
 **Editar variáveis de ambiente no arquivo de serviço:**
@@ -76,8 +85,8 @@ O deploy copia arquivos para: `~/automais.io/vpnserver.io/`
 4. **Copy Files:** Copia arquivo tar.gz para o servidor via SCP
 5. **Extract:** Extrai arquivos no servidor
 6. **Install Dependencies:** Instala/atualiza dependências Python no venv
-7. **Copy Service:** Copia arquivo de serviço systemd (se existir)
-8. **Restart Service:** Reinicia o serviço vpnserverio.service
+7. **Copy Services:** Copia arquivos de serviço systemd (vpnserverio.service e routeros.service)
+8. **Restart Services:** Reinicia os serviços vpnserverio.service e routeros.service
 
 ## Execução Manual
 
@@ -85,20 +94,28 @@ Você pode executar o deploy manualmente:
 
 **Actions → Deploy VPN Server → Run workflow**
 
-## Serviço Systemd
+## Serviços Systemd
 
-O arquivo de serviço está em `deploy/vpnserverio.service` e é copiado automaticamente durante o deploy.
+Os arquivos de serviço estão em `deploy/vpnserverio.service` e `deploy/routeros.service` e são copiados automaticamente durante o deploy.
 
 **Primeira vez (manual):**
 
 ```bash
+# Copiar serviços
 sudo cp /root/automais.io/vpnserver.io/deploy/vpnserverio.service /etc/systemd/system/
+sudo cp /root/automais.io/vpnserver.io/deploy/routeros.service /etc/systemd/system/
+
+# Recarregar systemd
 sudo systemctl daemon-reload
+
+# Habilitar e iniciar serviços
 sudo systemctl enable vpnserverio.service
+sudo systemctl enable routeros.service
 sudo systemctl start vpnserverio.service
+sudo systemctl start routeros.service
 ```
 
-**Após o primeiro deploy, o serviço é gerenciado automaticamente pelo workflow.**
+**Após o primeiro deploy, os serviços são gerenciados automaticamente pelo workflow.**
 
 ## Verificação
 
@@ -111,11 +128,13 @@ ssh root@automais.io
 # Verificar arquivos
 ls -la ~/automais.io/vpnserver.io/
 
-# Verificar serviço
+# Verificar serviços
 sudo systemctl status vpnserverio.service
+sudo systemctl status routeros.service
 
 # Ver logs
 sudo journalctl -u vpnserverio.service -f
+sudo journalctl -u routeros.service -f
 ```
 
 ## Troubleshooting
@@ -124,10 +143,39 @@ sudo journalctl -u vpnserverio.service -f
 - Verifique se `SERVER_PASSWORD` está correto no GitHub Secrets
 - Verifique se o usuário tem permissão para acessar o servidor
 
-### Serviço não reinicia
-- O workflow procura por `vpnserverio.service`
+### routeros.service não foi copiado
+Se o `routeros.service` não foi copiado automaticamente pelo deploy, você pode instalá-lo manualmente:
+
+**Opção 1: Usar script de instalação**
+```bash
+cd /root/automais.io/vpnserver.io
+chmod +x deploy/install-routeros-service.sh
+./deploy/install-routeros-service.sh
+```
+
+**Opção 2: Instalação manual**
+```bash
+cd /root/automais.io/vpnserver.io
+sudo cp deploy/routeros.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable routeros.service
+sudo systemctl start routeros.service
+```
+
+**Verificar se foi instalado:**
+```bash
+sudo systemctl status routeros.service
+ls -la /etc/systemd/system/routeros.service
+```
+
+### Serviços não reiniciam
+- O workflow procura por `vpnserverio.service` e `routeros.service`
 - Se não encontrar, apenas copia os arquivos (sem reiniciar)
-- Execute manualmente: `sudo systemctl restart vpnserverio.service`
+- Execute manualmente:
+  ```bash
+  sudo systemctl restart vpnserverio.service
+  sudo systemctl restart routeros.service
+  ```
 
 ### Arquivos não copiados
 - Verifique se o diretório existe: `mkdir -p /root/automais.io/vpnserver.io`

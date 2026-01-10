@@ -344,6 +344,56 @@ async def handle_delete_route(router_id: str, router_ip: str, username: str, pas
         await ws.send(json.dumps({"error": str(e)}))
 
 
+async def handle_get_status(router_id: str, router_ip: str, username: str, password: str, ws: WebSocketServerProtocol):
+    """Verifica status da conexão RouterOS"""
+    try:
+        api = await get_router_connection(router_id, router_ip, username, password)
+        if not api:
+            await ws.send(json.dumps({
+                "success": False,
+                "connected": False,
+                "error": "Não foi possível conectar ao RouterOS"
+            }))
+            return
+        
+        # Testar conexão obtendo informações básicas do sistema
+        def get_status_sync():
+            try:
+                identity_resource = api.get_resource('/system/identity')
+                identity = identity_resource.get()
+                
+                resource_resource = api.get_resource('/system/resource')
+                resource = resource_resource.get()
+                
+                return {
+                    "connected": True,
+                    "identity": identity[0] if identity else None,
+                    "resource": resource[0] if resource else None,
+                    "router_ip": router_ip
+                }
+            except Exception as e:
+                return {
+                    "connected": False,
+                    "error": str(e)
+                }
+        
+        loop = asyncio.get_event_loop()
+        status = await loop.run_in_executor(executor, get_status_sync)
+        
+        await ws.send(json.dumps({
+            "success": True,
+            **status
+        }))
+        
+    except Exception as e:
+        logger.error(f"Erro ao verificar status: {e}")
+        await ws.send(json.dumps({
+            "success": False,
+            "connected": False,
+            "error": str(e)
+        }))
+
+
 async def handle_execute_command(router_id: str, router_ip: str, username: str, password: str, command: str, ws: WebSocketServerProtocol):
     """Executa comando RouterOS genérico"""
     try:
@@ -427,6 +477,8 @@ async def handle_websocket(ws: WebSocketServerProtocol, path: str):
                     await handle_list_routes(router_id, router_ip, username, password, ws)
                 elif action == "delete_route":
                     await handle_delete_route(router_id, router_ip, username, password, data.get("route_routeros_id"), ws)
+                elif action == "get_status":
+                    await handle_get_status(router_id, router_ip, username, password, ws)
                 elif action == "execute_command":
                     await handle_execute_command(router_id, router_ip, username, password, data.get("command", ""), ws)
                 else:

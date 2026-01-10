@@ -25,17 +25,28 @@ VPN_SERVER_NAME=automais.io
 API_C_SHARP_URL=http://localhost:5000
 ```
 
-### 3. Reiniciar serviço
+### 3. Configurar serviços systemd (primeira vez)
 
 ```bash
+# Copiar arquivos de serviço
+sudo cp /root/automais.io/vpnserver.io/deploy/vpnserverio.service /etc/systemd/system/
+sudo cp /root/automais.io/vpnserver.io/deploy/routeros.service /etc/systemd/system/
+
+# Recarregar systemd
 sudo systemctl daemon-reload
-sudo systemctl restart vpnserverio.service
+
+# Habilitar e iniciar serviços
+sudo systemctl enable vpnserverio.service
+sudo systemctl enable routeros.service
+sudo systemctl start vpnserverio.service
+sudo systemctl start routeros.service
 ```
 
 ### 4. Verificar status
 
 ```bash
 sudo systemctl status vpnserverio.service
+sudo systemctl status routeros.service
 ```
 
 ---
@@ -89,17 +100,22 @@ WIREGUARD_CONFIG_DIR=/etc/wireguard
 
 ## 🔍 Troubleshooting
 
-### Serviço não inicia:
+### Serviços não iniciam:
 
 ```bash
 # Ver logs
 sudo journalctl -u vpnserverio.service -n 50
+sudo journalctl -u routeros.service -n 50
 
 # Verificar se arquivo existe
 ls -la /root/automais.io/vpnserver.env
 
 # Verificar conteúdo
 cat /root/automais.io/vpnserver.env
+
+# Verificar se serviços estão habilitados
+sudo systemctl is-enabled vpnserverio.service
+sudo systemctl is-enabled routeros.service
 ```
 
 ### Variáveis não carregadas:
@@ -108,8 +124,9 @@ cat /root/automais.io/vpnserver.env
 # Recarregar systemd
 sudo systemctl daemon-reload
 
-# Reiniciar serviço
+# Reiniciar serviços
 sudo systemctl restart vpnserverio.service
+sudo systemctl restart routeros.service
 ```
 
 ---
