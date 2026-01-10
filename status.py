@@ -88,9 +88,9 @@ async def get_wireguard_status() -> Dict[str, Any]:
                     current_interface = interface_name
                     try:
                         # Formato peer: interface, public_key, endpoint, allowed_ips, latest_handshake, transfer_rx, transfer_tx, persistent_keepalive
-                        endpoint = parts[2] if len(parts) > 2 and parts[2] != '(none)' and parts[2] else None
-                        allowed_ips_str = parts[3] if len(parts) > 3 and parts[3] else ""
-                        latest_handshake = parts[4] if len(parts) > 4 and parts[4] != '0' and parts[4] else None
+                        endpoint = parts[2] if len(parts) > 2 and parts[2] != '(none)' and parts[2].strip() else None
+                        allowed_ips_str = parts[3] if len(parts) > 3 and parts[3].strip() else ""
+                        latest_handshake_str = parts[4] if len(parts) > 4 and parts[4].strip() else None
                         
                         # Transfer pode estar em bytes (números grandes)
                         transfer_rx = 0
@@ -109,9 +109,9 @@ async def get_wireguard_status() -> Dict[str, Any]:
                         # Determinar status baseado no handshake
                         status = "offline"
                         handshake_datetime = None
-                        if latest_handshake and latest_handshake != '0':
+                        if latest_handshake_str and latest_handshake_str != '0' and latest_handshake_str.strip():
                             try:
-                                handshake_timestamp = int(latest_handshake)
+                                handshake_timestamp = int(latest_handshake_str)
                                 if handshake_timestamp > 0:
                                     # Converter timestamp Unix para datetime UTC
                                     handshake_datetime = datetime.utcfromtimestamp(handshake_timestamp).isoformat() + 'Z'
@@ -120,18 +120,21 @@ async def get_wireguard_status() -> Dict[str, Any]:
                                     time_diff = current_timestamp - handshake_timestamp
                                     if time_diff >= 0 and time_diff < 180:  # 3 minutos (180 segundos)
                                         status = "online"
+                                        logger.debug(f"Peer {public_key[:16]}... ONLINE: handshake há {time_diff:.1f}s")
                                     else:
-                                        logger.debug(f"Peer offline: handshake há {time_diff:.0f} segundos (limite: 180s)")
+                                        logger.info(f"Peer {public_key[:16]}... OFFLINE: handshake há {time_diff:.0f}s (limite: 180s)")
                             except (ValueError, TypeError) as e:
-                                logger.debug(f"Erro ao processar handshake {latest_handshake}: {e}")
+                                logger.warning(f"Erro ao processar handshake '{latest_handshake_str}': {e}")
                                 pass
+                        else:
+                            logger.info(f"Peer {public_key[:16]}... sem handshake válido: '{latest_handshake_str}'")
                         
                         # Buscar informações do router/VPN do arquivo de configuração
                         peer_info = _get_peer_info_from_config(current_interface, public_key)
                         
-                        # Extrair IP do peer do allowed_ips (remover /CIDR se houver)
-                        peer_ip = None
-                        if allowed_ips_str:
+                        # Extrair IP do peer - priorizar o IP do arquivo de config, senão usar allowed_ips
+                        peer_ip = peer_info.get("peer_ip")
+                        if not peer_ip and allowed_ips_str:
                             # Pegar o primeiro IP da lista
                             first_ip = allowed_ips_str.split(',')[0].strip()
                             # Remover o prefixo CIDR se houver (ex: 10.222.111.0/24 -> 10.222.111.0)
@@ -139,6 +142,9 @@ async def get_wireguard_status() -> Dict[str, Any]:
                                 peer_ip = first_ip.split('/')[0].strip()
                             else:
                                 peer_ip = first_ip
+                        
+                        # Log para debug
+                        logger.debug(f"Peer parseado: key={public_key[:16]}..., endpoint={endpoint}, allowed_ips={allowed_ips_str}, peer_ip={peer_ip}, handshake={latest_handshake_str}, status={status}, rx={transfer_rx}, tx={transfer_tx}")
                         
                         peer = {
                             "public_key": public_key,
@@ -203,16 +209,31 @@ def _get_peer_info_from_config(interface_name: str, public_key: str) -> Dict[str
         
         # Procurar o bloco de comentários antes do peer com esta public_key
         # Padrão: comentários antes de [Peer] seguido de PublicKey = {public_key}
-        pattern = rf'# Router: (.+?)\n.*?# Router ID: (.+?)\n.*?# VPN Network: (.+?)\n.*?# VPN Network ID: (.+?)\n.*?\[Peer\].*?PublicKey = {re.escape(public_key)}'
+        pattern = rf'# Router: (.+?)\n.*?# Router ID: (.+?)\n.*?# VPN Network: (.+?)\n.*?# VPN Network ID: (.+?)\n.*?\[Peer\].*?PublicKey = {re.escape(public_key)}.*?AllowedIPs = ([^\n]+)'
         match = re.search(pattern, content, re.DOTALL)
         
+        peer_ip = None
         if match:
-            return {
+            # Tentar extrair o IP do AllowedIPs
+            allowed_ips_line = match.group(5).strip() if len(match.groups()) >= 5 else ""
+            if allowed_ips_line:
+                # Pegar o primeiro IP da lista
+                first_ip = allowed_ips_line.split(',')[0].strip()
+                # Remover o prefixo CIDR se houver
+                if '/' in first_ip:
+                    peer_ip = first_ip.split('/')[0].strip()
+                else:
+                    peer_ip = first_ip
+            
+            result = {
                 "router_name": match.group(1).strip(),
                 "router_id": match.group(2).strip(),
                 "vpn_network_name": match.group(3).strip(),
                 "vpn_network_id": match.group(4).strip()
             }
+            if peer_ip:
+                result["peer_ip"] = peer_ip
+            return result
     except Exception as e:
         logger.debug(f"Erro ao ler informações do peer do arquivo de config: {e}")
     
