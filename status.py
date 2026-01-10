@@ -113,12 +113,15 @@ async def get_wireguard_status() -> Dict[str, Any]:
                             try:
                                 handshake_timestamp = int(latest_handshake)
                                 if handshake_timestamp > 0:
-                                    handshake_datetime = datetime.fromtimestamp(handshake_timestamp).isoformat()
+                                    # Converter timestamp Unix para datetime UTC
+                                    handshake_datetime = datetime.utcfromtimestamp(handshake_timestamp).isoformat() + 'Z'
                                     # Considerar online se handshake foi nos últimos 3 minutos (mais tolerante)
                                     current_timestamp = datetime.utcnow().timestamp()
                                     time_diff = current_timestamp - handshake_timestamp
-                                    if time_diff < 180:  # 3 minutos
+                                    if time_diff >= 0 and time_diff < 180:  # 3 minutos (180 segundos)
                                         status = "online"
+                                    else:
+                                        logger.debug(f"Peer offline: handshake há {time_diff:.0f} segundos (limite: 180s)")
                             except (ValueError, TypeError) as e:
                                 logger.debug(f"Erro ao processar handshake {latest_handshake}: {e}")
                                 pass
@@ -126,9 +129,21 @@ async def get_wireguard_status() -> Dict[str, Any]:
                         # Buscar informações do router/VPN do arquivo de configuração
                         peer_info = _get_peer_info_from_config(current_interface, public_key)
                         
+                        # Extrair IP do peer do allowed_ips (remover /CIDR se houver)
+                        peer_ip = None
+                        if allowed_ips_str:
+                            # Pegar o primeiro IP da lista
+                            first_ip = allowed_ips_str.split(',')[0].strip()
+                            # Remover o prefixo CIDR se houver (ex: 10.222.111.0/24 -> 10.222.111.0)
+                            if '/' in first_ip:
+                                peer_ip = first_ip.split('/')[0].strip()
+                            else:
+                                peer_ip = first_ip
+                        
                         peer = {
                             "public_key": public_key,
                             "allowed_ips": [ip.strip() for ip in allowed_ips_str.split(',') if ip.strip()],
+                            "peer_ip": peer_ip,  # IP do peer sem CIDR
                             "latest_handshake": handshake_datetime,
                             "transfer_rx": transfer_rx,
                             "transfer_tx": transfer_tx,

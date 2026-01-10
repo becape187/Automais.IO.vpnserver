@@ -316,7 +316,8 @@ def get_dashboard_html() -> str:
                                 <div class="peer-info">
                                     <div class="peer-info-item">
                                         <strong>IP da VPN:</strong><br>
-                                        ${{peer.allowed_ips && peer.allowed_ips.length > 0 ? peer.allowed_ips[0] : 'N/A'}}
+                                        ${{peer.peer_ip || (peer.allowed_ips && peer.allowed_ips.length > 0 ? peer.allowed_ips[0].split('/')[0] : 'N/A')}}
+                                        ${{peer.allowed_ips && peer.allowed_ips.length > 0 && peer.allowed_ips[0].includes('/') ? '<br><small style="color: #999;">Rede: ' + peer.allowed_ips[0] + '</small>' : ''}}
                                     </div>
                                     ${{peer.endpoint ? `
                                     <div class="peer-info-item">
