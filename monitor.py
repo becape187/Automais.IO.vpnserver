@@ -13,6 +13,8 @@ import httpx
 from config import API_C_SHARP_URL, MONITOR_INTERVAL_SECONDS, PING_ATTEMPTS, PING_TIMEOUT_MS, MAX_CONCURRENT_PINGS
 from sync import get_managed_resources
 from status import get_wireguard_status
+from api_client import get_router_static_routes_from_api, get_router_wireguard_peers_from_api, get_router_from_api
+from routeros_websocket import get_router_connection, is_automais_route, extract_route_id_from_comment
 
 logger = logging.getLogger(__name__)
 
@@ -313,6 +315,122 @@ async def monitor_all_routers() -> None:
         logger.error(f"Erro ao monitorar routers: {e}")
 
 
+async def sync_routes_for_router(router: Dict[str, Any]) -> None:
+    """Sincroniza rotas de um router: verifica se rotas Applied ainda existem no RouterOS"""
+    router_id = router.get("id")
+    router_name = router.get("name", "Unknown")
+    
+    try:
+        # Buscar rotas do banco com status Applied
+        routes_db = await get_router_static_routes_from_api(router_id)
+        # Status pode vir como string ("Applied") ou número (3) do JSON
+        routes_applied = [
+            r for r in routes_db 
+            if r.get("status") == "Applied" or r.get("status") == 3 or str(r.get("status")).lower() == "applied"
+        ]
+        
+        if not routes_applied:
+            return
+        
+        # Obter IP do router
+        router_data = await get_router_from_api(router_id)
+        if not router_data:
+            return
+        
+        router_ip = router_data.get("routerOsApiUrl", "").split(":")[0] if router_data.get("routerOsApiUrl") else None
+        if not router_ip:
+            # Tentar buscar do peer WireGuard
+            peers = await get_router_wireguard_peers_from_api(router_id)
+            if peers:
+                allowed_ips = peers[0].get("allowedIps", "")
+                if allowed_ips:
+                    router_ip = allowed_ips.split(",")[0].strip().split("/")[0]
+        
+        if not router_ip:
+            logger.debug(f"Router {router_name} ({router_id}) não tem IP válido para sincronização de rotas")
+            return
+        
+        # Conectar ao RouterOS
+        api = await get_router_connection(
+            router_id,
+            router_ip,
+            router_data.get("routerOsApiUsername", "admin"),
+            router_data.get("routerOsApiPassword", "")
+        )
+        
+        if not api:
+            logger.debug(f"Não foi possível conectar ao RouterOS para sincronizar rotas: {router_name} ({router_id})")
+            return
+        
+        # Buscar rotas do RouterOS
+        def get_routes_sync():
+            route_resource = api.get_resource('/ip/route')
+            return route_resource.get()
+        
+        loop = asyncio.get_event_loop()
+        routes_routeros = await loop.run_in_executor(None, get_routes_sync)
+        
+        # Criar mapa de rotas RouterOS por ID (extraído do comment)
+        routes_routeros_map = {}
+        for route in routes_routeros:
+            comment = route.get("comment", "")
+            if is_automais_route(comment):
+                route_id = extract_route_id_from_comment(comment)
+                if route_id:
+                    routes_routeros_map[route_id] = route
+        
+        # Verificar quais rotas Applied não existem mais no RouterOS
+        routes_to_remove = []
+        for route_db in routes_applied:
+            route_id = route_db.get("id")
+            if route_id and route_id not in routes_routeros_map:
+                # Rota deveria existir mas não existe mais - marcar para remover
+                routes_to_remove.append(route_id)
+                logger.warning(
+                    f"⚠️ Rota {route_id} (destino: {route_db.get('destination')}) "
+                    f"deveria existir no RouterOS mas não foi encontrada. Removendo do banco."
+                )
+        
+        # Remover rotas ausentes do banco via API C#
+        for route_id in routes_to_remove:
+            try:
+                verify_ssl = os.getenv("API_C_SHARP_VERIFY_SSL", "true").lower() == "true"
+                async with httpx.AsyncClient(timeout=30.0, verify=verify_ssl) as client:
+                    response = await client.delete(
+                        f"{API_C_SHARP_URL}/api/routers/{router_id}/routes/{route_id}",
+                        headers={"Accept": "application/json"}
+                    )
+                    
+                    if response.status_code in [200, 204]:
+                        logger.info(f"✅ Rota {route_id} removida do banco (não existia no RouterOS)")
+                    else:
+                        logger.warning(f"⚠️ Erro ao remover rota {route_id} do banco: {response.status_code}")
+            except Exception as e:
+                logger.error(f"Erro ao remover rota {route_id} do banco: {e}")
+        
+    except Exception as e:
+        logger.error(f"Erro ao sincronizar rotas do router {router_name} ({router_id}): {e}")
+
+
+async def sync_routes_for_all_routers() -> None:
+    """Sincroniza rotas de todos os routers"""
+    try:
+        managed = get_managed_resources()
+        routers = managed.get("routers", [])
+        
+        if not routers:
+            return
+        
+        logger.debug(f"🔄 Sincronizando rotas de {len(routers)} router(s)")
+        
+        # Sincronizar rotas de todos os routers em paralelo
+        tasks = [sync_routes_for_router(router) for router in routers]
+        await asyncio.gather(*tasks, return_exceptions=True)
+        
+    except Exception as e:
+        logger.error(f"Erro ao sincronizar rotas: {e}")
+
+
 async def background_monitor_loop():
     """Loop em background para monitorar routers periodicamente"""
     logger.info(f"🔄 Iniciando loop de monitoramento (intervalo: {MONITOR_INTERVAL_SECONDS}s)")
@@ -320,6 +438,8 @@ async def background_monitor_loop():
     while True:
         try:
             await monitor_all_routers()
+            # Sincronizar rotas após monitoramento
+            await sync_routes_for_all_routers()
             await asyncio.sleep(MONITOR_INTERVAL_SECONDS)
         except Exception as e:
             logger.error(f"Erro no loop de monitoramento: {e}")
