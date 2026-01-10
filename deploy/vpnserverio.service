@@ -12,12 +12,10 @@ RestartSec=10
 KillSignal=SIGINT
 SyslogIdentifier=vpnserverio
 
-# Variáveis de ambiente - IMPORTANTE: cada variável em uma linha separada
-Environment="VPN_SERVER_NAME=vpn-server-usa"
-Environment="API_C_SHARP_URL=http://localhost:5000"
-Environment="SYNC_INTERVAL_SECONDS=60"
-Environment="PORT=8000"
-Environment="WIREGUARD_CONFIG_DIR=/etc/wireguard"
+# Variáveis de ambiente - Lidas do arquivo vpnserver.env
+# O arquivo deve estar em /root/automais.io/vpnserver.env
+# Veja CONFIGURACAO_VPN_SERVER.md para mais detalhes
+EnvironmentFile=/root/automais.io/vpnserver.env
 
 [Install]
 WantedBy=multi-user.target

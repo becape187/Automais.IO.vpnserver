@@ -23,6 +23,9 @@ logs/
 # Environment variables
 .env
 .env.local
+vpnserver.env
+# Manter o exemplo no repositório
+!vpnserver.env.example
 
 # OS
 .DS_Store

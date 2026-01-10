@@ -25,14 +25,35 @@ pip install -r requirements.txt
 
 ## Configuração
 
-Criar arquivo `.env`:
+O serviço lê suas configurações do arquivo `/root/automais.io/vpnserver.env`.
 
-```env
-VPN_SERVER_NAME=vpn-server-usa
+### Primeira Configuração
+
+1. **Copie o arquivo de exemplo:**
+   ```bash
+   sudo cp vpnserver.env.example /root/automais.io/vpnserver.env
+   ```
+
+2. **Edite o arquivo com suas configurações:**
+   ```bash
+   sudo nano /root/automais.io/vpnserver.env
+   ```
+
+3. **Configure pelo menos:**
+   - `VPN_SERVER_NAME` - Nome identificador do servidor (obrigatório)
+   - `API_C_SHARP_URL` - URL da API C# principal
+
+### Exemplo de Configuração
+
+```bash
+VPN_SERVER_NAME=automais.io
 API_C_SHARP_URL=http://localhost:5000
 SYNC_INTERVAL_SECONDS=60
 PORT=8000
+WIREGUARD_CONFIG_DIR=/etc/wireguard
 ```
+
+> 📖 **Documentação completa:** Veja [CONFIGURACAO_VPN_SERVER.md](./CONFIGURACAO_VPN_SERVER.md) para detalhes de todas as variáveis e opções de configuração.
 
 ## Execução
 
@@ -48,27 +69,49 @@ Cada instância do serviço VPN:
 3. **Sincroniza periodicamente** (padrão: 60s)
 4. **Gerencia apenas** os recursos atribuídos a ela
 
-## Dashboard em Tempo Real
+## 🔍 Acesso ao Serviço
+
+### Swagger (Documentação Interativa)
+
+Acesse a documentação completa da API com interface interativa:
+
+- **Swagger UI:** `http://seu-servidor:8000/docs`
+  - Interface interativa para testar todos os endpoints
+  - Exemplos de requisições e respostas
+  - Modelos de dados (schemas)
+
+- **ReDoc:** `http://seu-servidor:8000/redoc`
+  - Documentação alternativa em formato mais limpo
+
+- **OpenAPI JSON:** `http://seu-servidor:8000/openapi.json`
+  - Especificação OpenAPI em formato JSON
+
+**Exemplos:**
+- Local: `http://localhost:8000/docs`
+- Remoto: `http://srv01.automais.io:8000/docs`
+
+### 📊 Dashboard em Tempo Real
 
 Acesse o dashboard visual para monitorar o WireGuard em tempo real:
 
-- **Dashboard:** `http://localhost:8000/dashboard` - Interface visual com atualização automática a cada 3 segundos
+- **Dashboard:** `http://seu-servidor:8000/dashboard`
+  - Interface visual com atualização automática a cada 5 segundos
+  - Status completo de interfaces e peers
 
-O dashboard mostra:
-- 📊 Estatísticas gerais (interfaces, peers, tráfego)
+**Exemplos:**
+- Local: `http://localhost:8000/dashboard`
+- Remoto: `http://srv01.automais.io:8000/dashboard`
+
+**O dashboard mostra:**
+- 📊 Estatísticas gerais (interfaces, peers, tráfego total)
 - 🔌 Status de cada interface WireGuard
 - 👥 Lista de peers com status online/offline
 - 📈 Tráfego de download/upload por peer
 - ⏱️ Último handshake de cada peer
 - 🌐 Endpoints e IPs permitidos
+- 🔑 Chaves públicas dos peers
 
-## Documentação da API (Swagger)
-
-O serviço inclui documentação interativa via Swagger/OpenAPI:
-
-- **Swagger UI:** `http://localhost:8000/docs` - Interface interativa para testar endpoints
-- **ReDoc:** `http://localhost:8000/redoc` - Documentação alternativa em formato mais limpo
-- **OpenAPI JSON:** `http://localhost:8000/openapi.json` - Especificação OpenAPI em JSON
+> 📖 **Guia completo de acesso:** Veja [ACESSO.md](./ACESSO.md) para mais detalhes, troubleshooting e configurações de segurança.
 
 ### Principais Endpoints:
 

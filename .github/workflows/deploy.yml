@@ -119,6 +119,22 @@ jobs:
             echo "Verificando instalação:"
             ls -lh venv/bin/uvicorn || true
             
+            # Verificar/criar arquivo de configuração vpnserver.env
+            if [ ! -f "/root/automais.io/vpnserver.env" ]; then
+              echo "⚠️  Arquivo vpnserver.env não encontrado"
+              if [ -f "vpnserver.env.example" ]; then
+                echo "Criando vpnserver.env a partir do exemplo..."
+                sudo cp vpnserver.env.example /root/automais.io/vpnserver.env
+                sudo chmod 600 /root/automais.io/vpnserver.env
+                echo "⚠️  IMPORTANTE: Edite /root/automais.io/vpnserver.env com as configurações corretas!"
+              else
+                echo "❌ Arquivo vpnserver.env.example não encontrado no repositório"
+                echo "Crie manualmente o arquivo /root/automais.io/vpnserver.env"
+              fi
+            else
+              echo "✓ Arquivo vpnserver.env encontrado"
+            fi
+            
             # Copiar arquivo de serviço systemd se existir
             if [ -f "deploy/vpnserverio.service" ]; then
               echo "Copiando arquivo de serviço systemd..."
