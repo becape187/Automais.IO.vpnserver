@@ -254,23 +254,23 @@ async def monitor_router(router: Dict[str, Any]) -> None:
             "ping_packet_loss": ping_result.get("packet_loss", 100.0)
         }
         
-            if peer_wg_stats:
-                # Converter latest_handshake de ISO string para datetime se necessário
-                handshake = peer_wg_stats.get("latest_handshake")
-                if handshake:
-                    try:
-                        if isinstance(handshake, str):
-                            # Remover Z e converter para datetime
-                            handshake_clean = handshake.replace('Z', '+00:00')
-                            dt = datetime.fromisoformat(handshake_clean)
-                            # Converter para ISO string para JSON
-                            update_data["last_handshake"] = dt.isoformat()
-                        elif isinstance(handshake, datetime):
-                            # Converter para ISO string para JSON
-                            update_data["last_handshake"] = handshake.isoformat()
-                    except Exception as e:
-                        logger.debug(f"Erro ao converter handshake {handshake}: {e}")
-                        pass
+        if peer_wg_stats:
+            # Converter latest_handshake de ISO string para datetime se necessário
+            handshake = peer_wg_stats.get("latest_handshake")
+            if handshake:
+                try:
+                    if isinstance(handshake, str):
+                        # Remover Z e converter para datetime
+                        handshake_clean = handshake.replace('Z', '+00:00')
+                        dt = datetime.fromisoformat(handshake_clean)
+                        # Converter para ISO string para JSON
+                        update_data["last_handshake"] = dt.isoformat()
+                    elif isinstance(handshake, datetime):
+                        # Converter para ISO string para JSON
+                        update_data["last_handshake"] = handshake.isoformat()
+                except Exception as e:
+                    logger.debug(f"Erro ao converter handshake {handshake}: {e}")
+                    pass
             
             update_data["bytes_received"] = peer_wg_stats.get("transfer_rx", 0)
             update_data["bytes_sent"] = peer_wg_stats.get("transfer_tx", 0)
