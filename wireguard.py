@@ -512,6 +512,10 @@ async def rebuild_interface_config(vpn_network: Dict[str, Any], routers: List[Di
     
     new_content += "\n# Peers adicionados automaticamente pela API\n\n"
     
+    # Log para debug: contar routers e peers
+    routers_for_vpn = [r for r in routers if r.get("vpn_network_id") == vpn_network_id]
+    logger.info(f"🔍 Processando {len(routers_for_vpn)} router(s) para VPN {vpn_network_id} ({vpn_network.get('name', '')})")
+    
     # Adicionar todos os peers habilitados dos routers desta VPN
     peers_added = 0
     for router in routers:
@@ -521,6 +525,8 @@ async def rebuild_interface_config(vpn_network: Dict[str, Any], routers: List[Di
         router_id = router.get("id")
         router_name = router.get("name", "")
         peers = router.get("peers", [])
+        
+        logger.debug(f"  Router {router_name} ({router_id}): {len(peers)} peer(s) encontrado(s)")
         
         for peer in peers:
             public_key = peer.get("public_key", "").strip()
@@ -556,6 +562,20 @@ async def rebuild_interface_config(vpn_network: Dict[str, Any], routers: List[Di
             
             peers_added += 1
     
+    # Log para debug
+    logger.info(f"🔍 Reconstruindo {interface_name}: {peers_added} peer(s) encontrado(s) na API")
+    
+    # Verificar se arquivo atual tem peers
+    current_has_peers = '[Peer]' in current_content
+    new_has_peers = peers_added > 0
+    
+    # Se arquivo atual não tem peers mas deveria ter, forçar atualização
+    if not current_has_peers and new_has_peers:
+        logger.info(f"📝 Arquivo {config_path} não tem peers mas deveria ter {peers_added}. Forçando atualização...")
+    # Se arquivo atual tem peers mas não deveria ter, forçar atualização
+    elif current_has_peers and not new_has_peers:
+        logger.info(f"📝 Arquivo {config_path} tem peers mas não deveria ter. Forçando atualização...")
+    
     # Normalizar espaços em branco para comparação (remover linhas vazias extras no final)
     # Também normalizar espaços em branco no início/fim de cada linha
     current_lines = [line.rstrip() for line in current_content.split('\n')]
@@ -564,8 +584,11 @@ async def rebuild_interface_config(vpn_network: Dict[str, Any], routers: List[Di
     current_content_normalized = '\n'.join(current_lines).rstrip() + '\n'
     new_content_normalized = '\n'.join(new_lines).rstrip() + '\n'
     
-    # Comparar conteúdos
-    if current_content_normalized == new_content_normalized:
+    # Se há diferença na presença de peers, forçar atualização (não comparar conteúdo)
+    if current_has_peers != new_has_peers:
+        logger.info(f"📝 Diferença detectada: arquivo atual tem peers={current_has_peers}, deveria ter peers={new_has_peers}. Forçando atualização...")
+    # Comparar conteúdos apenas se ambos têm ou não têm peers
+    elif current_content_normalized == new_content_normalized:
         # Mesmo que o conteúdo pareça igual, verificar se o arquivo tem problemas de encoding
         # Validar arquivo tentando parsear com wg
         stdout, stderr, returncode = execute_command(f"wg-quick strip {config_path}", check=False)
