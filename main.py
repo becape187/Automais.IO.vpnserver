@@ -465,6 +465,63 @@ async def dashboard():
 
 # ===== ENDPOINTS ROUTEROS =====
 
+@app.get(
+    "/api/v1/routeros/{router_id}/wireguard-interfaces",
+    tags=["RouterOS"],
+    summary="Lista interfaces WireGuard do RouterOS",
+    description="Lista todas as interfaces WireGuard do RouterOS, incluindo publickey para comparação."
+)
+async def list_wireguard_interfaces_endpoint(router_id: str):
+    """
+    Lista interfaces WireGuard do RouterOS
+    
+    - **router_id**: ID do router (UUID)
+    """
+    if not is_resource_managed(router_id, "router"):
+        raise HTTPException(status_code=403, detail=f"Router {router_id} não é gerenciado por esta instância")
+    
+    from routeros_websocket import list_wireguard_interfaces, get_router_password
+    from api_client import get_router_from_api
+    
+    try:
+        # Buscar router da API
+        router = await get_router_from_api(router_id)
+        if not router:
+            raise HTTPException(status_code=404, detail="Router não encontrado")
+        
+        # Obter IP do router
+        router_ip = router.get("routerOsApiUrl", "").replace("http://", "").replace("https://", "").split(":")[0]
+        if not router_ip:
+            # Tentar obter via peer WireGuard
+            peers = await get_router_wireguard_peers_from_api(router_id)
+            if peers:
+                allowed_ips = peers[0].get("allowedIps", "")
+                if allowed_ips:
+                    router_ip = allowed_ips.split(",")[0].strip().split("/")[0]
+        
+        if not router_ip:
+            raise HTTPException(status_code=400, detail="IP do router não encontrado")
+        
+        # Obter senha correta
+        password = get_router_password(router)
+        
+        # Listar interfaces WireGuard
+        interfaces = await list_wireguard_interfaces(
+            router_id,
+            router_ip,
+            router.get("routerOsApiUsername", "admin"),
+            password
+        )
+        
+        return {
+            "success": True,
+            "interfaces": interfaces
+        }
+    except Exception as e:
+        logger.error(f"Erro ao listar interfaces WireGuard: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post(
     "/api/v1/routeros/add-route",
     tags=["RouterOS"],

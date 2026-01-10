@@ -421,6 +421,54 @@ async def handle_add_route(router_id: str, route_data: Dict[str, Any], ws: WebSo
         await ws.send(json.dumps({"error": str(e)}))
 
 
+async def list_wireguard_interfaces(router_id: str, router_ip: str, username: str, password: str) -> List[Dict[str, Any]]:
+    """Lista interfaces WireGuard do RouterOS e retorna com publickey para comparação"""
+    try:
+        # Buscar router da API
+        router = await get_router_from_api(router_id)
+        if not router:
+            raise ValueError("Router não encontrado")
+        
+        # Conectar ao RouterOS
+        api = await get_router_connection(
+            router_id,
+            router_ip,
+            username,
+            password
+        )
+        
+        if not api:
+            raise ValueError("Não foi possível conectar ao RouterOS")
+        
+        def list_interfaces_sync():
+            """Lista interfaces WireGuard do RouterOS (síncrono)"""
+            interface_resource = api.get_resource('/interface/wireguard')
+            interfaces = interface_resource.get()
+            
+            # Todas as interfaces retornadas já são WireGuard
+            wireguard_interfaces = []
+            for iface in interfaces:
+                wireguard_interfaces.append({
+                    'name': iface.get('name', ''),
+                    'public-key': iface.get('public-key', ''),
+                    'listen-port': iface.get('listen-port', ''),
+                    'mtu': iface.get('mtu', ''),
+                    'disabled': iface.get('disabled', 'false'),
+                    'running': iface.get('running', 'false')
+                })
+            
+            return wireguard_interfaces
+        
+        loop = asyncio.get_event_loop()
+        interfaces = await loop.run_in_executor(executor, list_interfaces_sync)
+        
+        return interfaces
+        
+    except Exception as e:
+        logger.error(f"Erro ao listar interfaces WireGuard: {e}")
+        raise
+
+
 async def handle_list_routes(router_id: str, router_ip: str, username: str, password: str, ws: WebSocketServerProtocol):
     """Lista rotas do RouterOS, identificando quais são AUTOMAIS.IO"""
     try:
