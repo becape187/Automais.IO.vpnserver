@@ -351,11 +351,14 @@ async def sync_routes_for_router(router: Dict[str, Any]) -> None:
             return
         
         # Conectar ao RouterOS
+        # Usar função auxiliar para obter senha correta (AutomaisApiPassword ou RouterOsApiPassword)
+        from routeros_websocket import get_router_password
+        password = get_router_password(router_data)
         api = await get_router_connection(
             router_id,
             router_ip,
             router_data.get("routerOsApiUsername", "admin"),
-            router_data.get("routerOsApiPassword", "")
+            password
         )
         
         if not api:

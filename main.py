@@ -483,7 +483,7 @@ async def add_route(request: AddRouteRequest):
     if not is_resource_managed(request.router_id, "router"):
         raise HTTPException(status_code=403, detail=f"Router {request.router_id} não é gerenciado por esta instância")
     
-    from routeros_websocket import add_route_to_routeros
+    from routeros_websocket import add_route_to_routeros, get_router_password
     
     route_data = {
         "route_id": request.route_id,
@@ -524,7 +524,7 @@ async def remove_route(request: RemoveRouteRequest):
     if not is_resource_managed(request.router_id, "router"):
         raise HTTPException(status_code=403, detail=f"Router {request.router_id} não é gerenciado por esta instância")
     
-    from routeros_websocket import remove_route_from_routeros, get_router_connection
+    from routeros_websocket import remove_route_from_routeros, get_router_connection, get_router_password
     from api_client import get_router_from_api
     
     # Buscar router para obter credenciais
@@ -546,7 +546,8 @@ async def remove_route(request: RemoveRouteRequest):
         raise HTTPException(status_code=400, detail="IP do router não encontrado")
     
     username = router.get("routerOsApiUsername", "admin")
-    password = router.get("routerOsApiPassword", "")
+    # Usar função auxiliar para obter senha correta (AutomaisApiPassword ou RouterOsApiPassword)
+    password = get_router_password(router)
     
     result = await remove_route_from_routeros(
         request.router_id,

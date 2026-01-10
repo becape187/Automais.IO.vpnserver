@@ -24,8 +24,10 @@ except ImportError:
     class RouterOsApiCommunicationError(Exception):
         pass
 
-from api_client import get_router_from_api, get_router_static_routes_from_api, get_router_wireguard_peers_from_api
+from api_client import get_router_from_api, get_router_static_routes_from_api, get_router_wireguard_peers_from_api, update_router_password_in_api
 from config import API_C_SHARP_URL
+import secrets
+import string
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +56,84 @@ def extract_route_id_from_comment(comment: Optional[str]) -> Optional[str]:
     return match.group(1) if match else None
 
 
-def _get_router_connection_sync(router_id: str, router_ip: str, username: str, password: str):
-    """Obtém ou cria conexão RouterOS API (síncrono)"""
+def get_router_password(router: Dict[str, Any]) -> str:
+    """Obtém a senha correta do router
+    
+    Lógica:
+    - Se AutomaisApiPassword estiver disponível, usa ela
+    - Senão, usa RouterOsApiPassword (senha original)
+    
+    Returns:
+        Senha a ser usada para conectar ao RouterOS
+    """
+    # Priorizar AutomaisApiPassword se existir
+    automais_password = router.get("automaisApiPassword")
+    if automais_password:
+        return automais_password
+    
+    # Fallback para RouterOsApiPassword
+    return router.get("routerOsApiPassword", "")
+
+
+def generate_strong_password(length: int = 32) -> str:
+    """Gera uma senha forte aleatória"""
+    # Caracteres permitidos: letras maiúsculas, minúsculas, números e símbolos especiais
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*()_+-=[]{}|;:,.<>?"
+    # Garantir que tenha pelo menos um de cada tipo
+    password = (
+        secrets.choice(string.ascii_lowercase) +
+        secrets.choice(string.ascii_uppercase) +
+        secrets.choice(string.digits) +
+        secrets.choice("!@#$%^&*()_+-=[]{}|;:,.<>?")
+    )
+    # Completar o resto da senha
+    password += ''.join(secrets.choice(alphabet) for _ in range(length - 4))
+    # Embaralhar os caracteres
+    password_list = list(password)
+    secrets.SystemRandom().shuffle(password_list)
+    return ''.join(password_list)
+
+
+def change_user_password_sync(api: 'routeros_api.Connection', username: str, new_password: str) -> bool:
+    """Altera a senha do usuário no RouterOS (síncrono)"""
+    try:
+        # Buscar o usuário atual
+        user_resource = api.get_resource('/user')
+        users = user_resource.get(name=username)
+        
+        if not users:
+            logger.warning(f"Usuário {username} não encontrado no RouterOS")
+            return False
+        
+        user_id = users[0].get('id')
+        if not user_id:
+            logger.warning(f"ID do usuário {username} não encontrado")
+            return False
+        
+        # Alterar senha usando /user/set
+        user_resource.set(id=user_id, password=new_password)
+        logger.info(f"Senha do usuário {username} alterada com sucesso no RouterOS")
+        return True
+    except Exception as e:
+        logger.error(f"Erro ao alterar senha do usuário {username} no RouterOS: {e}")
+        return False
+
+
+def _get_router_connection_sync(router_id: str, router_ip: str, username: str, password: str, router_data: Optional[Dict[str, Any]] = None):
+    """Obtém ou cria conexão RouterOS API (síncrono)
+    
+    Lógica de senha:
+    - Se AutomaisApiPassword estiver nulo, tenta conectar com RouterOsApiPassword (senha original)
+    - Se conseguir conectar, imediatamente altera a senha para uma senha forte
+    - Atualiza RouterOsApiPassword para NULL e AutomaisApiPassword com a nova senha
+    
+    Args:
+        router_id: ID do router
+        router_ip: IP do router
+        username: Usuário da API RouterOS
+        password: Senha da API RouterOS (pode ser RouterOsApiPassword ou AutomaisApiPassword)
+        router_data: Dados do router (opcional, para evitar buscar novamente)
+    """
     try:
         # Verificar se já existe conexão em cache
         if router_id in router_connections:
@@ -69,6 +147,39 @@ def _get_router_connection_sync(router_id: str, router_ip: str, username: str, p
         
         # Criar nova conexão usando routeros_api.connect()
         api = routeros_api.connect(router_ip, username=username, password=password)
+        
+        # Se AutomaisApiPassword estiver nulo, significa que ainda não foi trocada
+        # Se conseguir conectar com RouterOsApiPassword, alterar imediatamente
+        if router_data and not router_data.get("automaisApiPassword"):
+            try:
+                logger.info(f"Primeira conexão detectada para router {router_id} (AutomaisApiPassword nulo). Alterando senha para senha forte...")
+                
+                # Gerar senha forte
+                new_password = generate_strong_password(32)
+                
+                # Alterar senha no RouterOS
+                if change_user_password_sync(api, username, new_password):
+                    # Fechar conexão antiga
+                    try:
+                        api.disconnect()
+                    except:
+                        pass
+                    
+                    # Reconectar com nova senha
+                    api = routeros_api.connect(router_ip, username=username, password=new_password)
+                    
+                    # Armazenar temporariamente para atualização assíncrona no banco
+                    # RouterOsApiPassword -> NULL, AutomaisApiPassword -> nova senha
+                    api._new_password = new_password
+                    api._router_id = router_id
+                    api._should_update_password = True
+                    logger.info(f"✅ Senha do router {router_id} alterada com sucesso no RouterOS")
+                else:
+                    logger.warning(f"⚠️ Falhou ao alterar senha no RouterOS para router {router_id}")
+            except Exception as e:
+                logger.error(f"Erro ao alterar senha na primeira conexão para router {router_id}: {e}")
+                # Continuar mesmo se falhar a alteração de senha
+        
         router_connections[router_id] = api
         logger.info(f"Conexão RouterOS estabelecida: {router_id} -> {router_ip}")
         return api
@@ -77,10 +188,56 @@ def _get_router_connection_sync(router_id: str, router_ip: str, username: str, p
         return None
 
 
-async def get_router_connection(router_id: str, router_ip: str, username: str, password: str):
-    """Obtém ou cria conexão RouterOS API (assíncrono wrapper)"""
+async def get_router_connection(router_id: str, router_ip: str, username: str, password: str, check_password_change: bool = True):
+    """Obtém ou cria conexão RouterOS API (assíncrono wrapper)
+    
+    Lógica:
+    - Se AutomaisApiPassword estiver nulo, usa RouterOsApiPassword para conectar
+    - Se conseguir conectar, altera senha e atualiza banco
+    
+    Args:
+        router_id: ID do router
+        router_ip: IP do router
+        username: Usuário da API RouterOS
+        password: Senha da API RouterOS (pode ser RouterOsApiPassword ou AutomaisApiPassword)
+        check_password_change: Se True, verifica e altera senha na primeira conexão
+    """
+    router_data = None
+    password_to_use = password
+    
+    if check_password_change:
+        # Buscar dados do router para verificar qual senha usar
+        router_data = await get_router_from_api(router_id)
+        
+        # Se AutomaisApiPassword estiver nulo, usar RouterOsApiPassword (senha original)
+        if router_data and not router_data.get("automaisApiPassword"):
+            password_to_use = router_data.get("routerOsApiPassword", password)
+            logger.info(f"AutomaisApiPassword nulo para router {router_id}. Usando RouterOsApiPassword para conectar.")
+    
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(executor, _get_router_connection_sync, router_id, router_ip, username, password)
+    api = await loop.run_in_executor(executor, _get_router_connection_sync, router_id, router_ip, username, password_to_use, router_data)
+    
+    # Se a senha foi alterada, atualizar no banco de dados de forma assíncrona
+    # RouterOsApiPassword -> NULL, AutomaisApiPassword -> nova senha
+    if api and hasattr(api, '_should_update_password') and api._should_update_password:
+        new_password = api._new_password
+        router_id_to_update = api._router_id
+        # Remover atributos temporários
+        delattr(api, '_new_password')
+        delattr(api, '_router_id')
+        delattr(api, '_should_update_password')
+        
+        # Atualizar senha no banco de forma assíncrona (não bloquear)
+        try:
+            success = await update_router_password_in_api(router_id_to_update, new_password)
+            if success:
+                logger.info(f"✅ Senha do router {router_id_to_update} atualizada no banco (RouterOsApiPassword=NULL, AutomaisApiPassword=nova senha)")
+            else:
+                logger.error(f"⚠️ Falhou ao atualizar senha no banco para router {router_id_to_update}")
+        except Exception as e:
+            logger.error(f"Erro ao atualizar senha no banco para router {router_id_to_update}: {e}")
+    
+    return api
 
 
 async def add_route_to_routeros(router_id: str, route_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -214,11 +371,13 @@ async def handle_add_route(router_id: str, route_data: Dict[str, Any], ws: WebSo
             return
         
         # Conectar ao RouterOS
+        # Usar função auxiliar para obter senha correta (AutomaisApiPassword ou RouterOsApiPassword)
+        password = get_router_password(router)
         api = await get_router_connection(
             router_id,
             router_ip,
             router.get("routerOsApiUsername", "admin"),
-            router.get("routerOsApiPassword", "")
+            password
         )
         
         if not api:
@@ -344,16 +503,19 @@ async def handle_delete_route(router_id: str, router_ip: str, username: str, pas
         await ws.send(json.dumps({"error": str(e)}))
 
 
-async def handle_get_status(router_id: str, router_ip: str, username: str, password: str, ws: WebSocketServerProtocol):
+async def handle_get_status(router_id: str, router_ip: str, username: str, password: str, ws: WebSocketServerProtocol, request_id: str = None):
     """Verifica status da conexão RouterOS"""
     try:
         api = await get_router_connection(router_id, router_ip, username, password)
         if not api:
-            await ws.send(json.dumps({
+            response = {
                 "success": False,
                 "connected": False,
                 "error": "Não foi possível conectar ao RouterOS"
-            }))
+            }
+            if request_id:
+                response["id"] = request_id
+            await ws.send(json.dumps(response))
             return
         
         # Testar conexão obtendo informações básicas do sistema
@@ -380,10 +542,14 @@ async def handle_get_status(router_id: str, router_ip: str, username: str, passw
         loop = asyncio.get_event_loop()
         status = await loop.run_in_executor(executor, get_status_sync)
         
-        await ws.send(json.dumps({
-            "success": True,
+        response = {
+            "success": status.get("connected", False),
             **status
-        }))
+        }
+        if request_id:
+            response["id"] = request_id
+        
+        await ws.send(json.dumps(response))
         
     except Exception as e:
         logger.error(f"Erro ao verificar status: {e}")
@@ -394,37 +560,91 @@ async def handle_get_status(router_id: str, router_ip: str, username: str, passw
         }))
 
 
-async def handle_execute_command(router_id: str, router_ip: str, username: str, password: str, command: str, ws: WebSocketServerProtocol):
+async def handle_execute_command(router_id: str, router_ip: str, username: str, password: str, command: str, ws: WebSocketServerProtocol, request_id: str = None):
     """Executa comando RouterOS genérico"""
     try:
         api = await get_router_connection(router_id, router_ip, username, password)
         if not api:
-            await ws.send(json.dumps({"error": "Não foi possível conectar ao RouterOS"}))
+            await ws.send(json.dumps({"success": False, "error": "Não foi possível conectar ao RouterOS"}))
             return
         
-        # Parse do comando (ex: "/ip/firewall/filter/print")
-        parts = command.strip().split("/")
-        if len(parts) < 3:
-            await ws.send(json.dumps({"error": "Comando inválido"}))
+        # Parse do comando RouterOS
+        # Exemplos:
+        #   /ip/firewall/filter/print
+        #   /ip/firewall/filter/enable .id=*
+        #   /ip/firewall/filter/disable .id=*
+        #   /ip/firewall/filter/remove .id=*
+        #   /ip/route/print
+        #   /interface/print
+        
+        command = command.strip()
+        parts = command.split()
+        
+        if not parts or not parts[0].startswith("/"):
+            await ws.send(json.dumps({"success": False, "error": "Comando inválido. Deve começar com /"}))
             return
         
-        resource_path = "/" + "/".join(parts[1:-1])
-        action = parts[-1]
+        # Extrair caminho do recurso e ação
+        path_parts = parts[0].split("/")
+        if len(path_parts) < 3:
+            await ws.send(json.dumps({"success": False, "error": "Comando inválido. Formato: /categoria/recurso/acao"}))
+            return
+        
+        resource_path = "/" + "/".join(path_parts[1:-1])
+        action = path_parts[-1]
+        
+        # Parsear parâmetros (ex: .id=*, .id=123, etc)
+        params = {}
+        for part in parts[1:]:
+            if "=" in part:
+                key, value = part.split("=", 1)
+                params[key] = value
         
         def execute_command_sync():
             resource = api.get_resource(resource_path)
+            
             if action == "print":
                 return resource.get()
+            elif action == "enable":
+                if ".id" not in params:
+                    raise ValueError("Parâmetro .id é obrigatório para enable")
+                return resource.set(id=params[".id"], disabled="false")
+            elif action == "disable":
+                if ".id" not in params:
+                    raise ValueError("Parâmetro .id é obrigatório para disable")
+                return resource.set(id=params[".id"], disabled="true")
+            elif action == "remove":
+                if ".id" not in params:
+                    raise ValueError("Parâmetro .id é obrigatório para remove")
+                return resource.remove(id=params[".id"])
+            elif action == "add":
+                # Remover .id se existir (não é usado em add)
+                add_params = {k: v for k, v in params.items() if k != ".id"}
+                return resource.add(**add_params)
+            elif action == "set":
+                if ".id" not in params:
+                    raise ValueError("Parâmetro .id é obrigatório para set")
+                set_params = {k: v for k, v in params.items() if k != ".id"}
+                return resource.set(id=params[".id"], **set_params)
             else:
-                raise ValueError(f"Ação '{action}' não suportada")
+                raise ValueError(f"Ação '{action}' não suportada. Ações suportadas: print, enable, disable, remove, add, set")
         
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(executor, execute_command_sync)
-        await ws.send(json.dumps({"success": True, "data": result}))
+        
+        # Incluir ID da requisição se fornecido
+        response = {"success": True, "data": result}
+        if request_id:
+            response["id"] = request_id
+        
+        await ws.send(json.dumps(response))
         
     except Exception as e:
         logger.error(f"Erro ao executar comando: {e}")
-        await ws.send(json.dumps({"error": str(e)}))
+        error_response = {"success": False, "error": str(e)}
+        if request_id:
+            error_response["id"] = request_id
+        await ws.send(json.dumps(error_response))
 
 
 async def handle_websocket(ws: WebSocketServerProtocol, path: str):
@@ -468,7 +688,8 @@ async def handle_websocket(ws: WebSocketServerProtocol, path: str):
                     continue
                 
                 username = router.get("routerOsApiUsername", "admin")
-                password = router.get("routerOsApiPassword", "")
+                # Usar função auxiliar para obter senha correta (AutomaisApiPassword ou RouterOsApiPassword)
+                password = get_router_password(router)
                 
                 # Roteamento de ações
                 if action == "add_route":
@@ -478,9 +699,9 @@ async def handle_websocket(ws: WebSocketServerProtocol, path: str):
                 elif action == "delete_route":
                     await handle_delete_route(router_id, router_ip, username, password, data.get("route_routeros_id"), ws)
                 elif action == "get_status":
-                    await handle_get_status(router_id, router_ip, username, password, ws)
+                    await handle_get_status(router_id, router_ip, username, password, ws, data.get("id"))
                 elif action == "execute_command":
-                    await handle_execute_command(router_id, router_ip, username, password, data.get("command", ""), ws)
+                    await handle_execute_command(router_id, router_ip, username, password, data.get("command", ""), ws, data.get("id"))
                 else:
                     await ws.send(json.dumps({"error": f"Ação '{action}' não reconhecida"}))
                     
