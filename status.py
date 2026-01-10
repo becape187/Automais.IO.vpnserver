@@ -78,7 +78,9 @@ async def get_wireguard_status() -> Dict[str, Any]:
                 # Peer tem 8 campos: interface, public_key, endpoint, allowed_ips, latest_handshake, transfer_rx, transfer_tx, persistent_keepalive
                 elif len(parts) >= 8:
                     # Log para debug - verificar ordem dos campos
-                    logger.debug(f"Parseando peer: {len(parts)} campos - {parts[:8]}")
+                    logger.debug(f"Parseando peer: {len(parts)} campos")
+                    for idx, part in enumerate(parts[:8]):
+                        logger.debug(f"  Campo {idx}: '{part}'")
                     # Se não há interface atual, criar uma (pode acontecer se peer aparecer antes da interface)
                     if interface_name not in interfaces_dict:
                         interfaces_dict[interface_name] = {
@@ -110,23 +112,31 @@ async def get_wireguard_status() -> Dict[str, Any]:
                                 break
                         
                         # Procurar latest_handshake (número grande, timestamp Unix)
+                        # O timestamp Unix atual é ~1700000000 (10 dígitos), mas pode ser menor se for antigo
                         for i in range(2, min(8, len(parts))):
                             candidate = parts[i].strip()
-                            # Timestamp Unix é um número grande (10 dígitos ou mais)
-                            if candidate and candidate.isdigit() and len(candidate) >= 9:
-                                latest_handshake_str = candidate
-                                # Se encontramos o handshake, os próximos campos são transfer_rx e transfer_tx
-                                if i + 1 < len(parts):
-                                    try:
-                                        transfer_rx = int(parts[i + 1]) if parts[i + 1].strip() else 0
-                                    except (ValueError, IndexError):
-                                        pass
-                                if i + 2 < len(parts):
-                                    try:
-                                        transfer_tx = int(parts[i + 2]) if parts[i + 2].strip() else 0
-                                    except (ValueError, IndexError):
-                                        pass
-                                break
+                            # Timestamp Unix é um número (pode ter 9-10 dígitos)
+                            # Mas não pode ser muito pequeno (menor que 1000000000 = ano 2001)
+                            if candidate and candidate.isdigit():
+                                try:
+                                    ts = int(candidate)
+                                    # Timestamp Unix válido está entre 1000000000 (2001) e 9999999999 (2286)
+                                    if ts >= 1000000000 and ts <= 9999999999:
+                                        latest_handshake_str = candidate
+                                        # Se encontramos o handshake, os próximos campos são transfer_rx e transfer_tx
+                                        if i + 1 < len(parts):
+                                            try:
+                                                transfer_rx = int(parts[i + 1]) if parts[i + 1].strip() else 0
+                                            except (ValueError, IndexError):
+                                                pass
+                                        if i + 2 < len(parts):
+                                            try:
+                                                transfer_tx = int(parts[i + 2]) if parts[i + 2].strip() else 0
+                                            except (ValueError, IndexError):
+                                                pass
+                                        break
+                                except ValueError:
+                                    pass
                         
                         # Fallback: se não encontramos, usar ordem padrão
                         if not latest_handshake_str and len(parts) >= 8:
@@ -145,6 +155,7 @@ async def get_wireguard_status() -> Dict[str, Any]:
                                 pass
                         
                         # Determinar status baseado no handshake
+                        # Lógica: Se handshake foi há menos de 180 segundos (3 minutos), está ONLINE
                         status = "offline"
                         handshake_datetime = None
                         if latest_handshake_str and latest_handshake_str != '0' and latest_handshake_str.strip():
@@ -156,11 +167,23 @@ async def get_wireguard_status() -> Dict[str, Any]:
                                     # Considerar online se handshake foi nos últimos 3 minutos (mais tolerante)
                                     current_timestamp = datetime.utcnow().timestamp()
                                     time_diff = current_timestamp - handshake_timestamp
-                                    if time_diff >= 0 and time_diff < 180:  # 3 minutos (180 segundos)
+                                    
+                                    # Log detalhado para debug (INFO para ver melhor)
+                                    logger.info(f"Peer {public_key[:16]}... handshake: ts={handshake_timestamp}, current={current_timestamp:.0f}, diff={time_diff:.1f}s")
+                                    
+                                    # Se a diferença for negativa, o timestamp está no futuro (erro)
+                                    if time_diff < 0:
+                                        logger.warning(f"Peer {public_key[:16]}... timestamp do handshake está no futuro! ts={handshake_timestamp}, current={current_timestamp:.0f}")
+                                        status = "offline"
+                                    # Se handshake foi há menos de 180 segundos (3 minutos), está ONLINE
+                                    elif time_diff < 180:  # 3 minutos (180 segundos)
                                         status = "online"
-                                        logger.debug(f"Peer {public_key[:16]}... ONLINE: handshake há {time_diff:.1f}s")
+                                        logger.info(f"✅ Peer {public_key[:16]}... ONLINE: handshake há {time_diff:.1f}s")
                                     else:
-                                        logger.info(f"Peer {public_key[:16]}... OFFLINE: handshake há {time_diff:.0f}s (limite: 180s)")
+                                        # Converter para minutos e segundos para log mais legível
+                                        minutes = int(time_diff // 60)
+                                        seconds = int(time_diff % 60)
+                                        logger.info(f"❌ Peer {public_key[:16]}... OFFLINE: handshake há {minutes}m {seconds}s ({time_diff:.0f}s, limite: 180s)")
                             except (ValueError, TypeError) as e:
                                 logger.warning(f"Erro ao processar handshake '{latest_handshake_str}': {e}")
                                 pass
