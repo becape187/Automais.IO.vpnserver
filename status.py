@@ -211,14 +211,14 @@ async def get_wireguard_status() -> Dict[str, Any]:
                         
                         if handshake_timestamp and handshake_timestamp > 0:
                             # Converter timestamp Unix para datetime UTC em formato ISO 8601
-                            # IMPORTANTE: datetime.utcfromtimestamp() retorna UTC
+                            # IMPORTANTE: Usar timezone.utc explicitamente para garantir conversão correta
                             # O timestamp Unix é sempre em UTC, então a conversão deve estar correta
-                            handshake_utc = datetime.utcfromtimestamp(handshake_timestamp)
+                            handshake_utc = datetime.fromtimestamp(handshake_timestamp, tz=timezone.utc)
                             # Garantir formato ISO 8601 correto com 'Z' para indicar UTC
                             handshake_datetime = handshake_utc.strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
                             
                             # Log para debug - verificar timestamp e conversão
-                            current_utc = datetime.utcnow()
+                            current_utc = datetime.now(timezone.utc)
                             logger.info(
                                 f"🕐 Handshake: timestamp={handshake_timestamp}, "
                                 f"UTC={handshake_utc.strftime('%Y-%m-%d %H:%M:%S')}, "
@@ -226,7 +226,8 @@ async def get_wireguard_status() -> Dict[str, Any]:
                                 f"Current UTC={current_utc.strftime('%Y-%m-%d %H:%M:%S')}"
                             )
                             # Considerar online se handshake foi nos últimos 3 minutos (mais tolerante)
-                            current_timestamp = datetime.utcnow().timestamp()
+                            # Usar timezone UTC explicitamente
+                            current_timestamp = datetime.now(timezone.utc).timestamp()
                             time_diff = current_timestamp - handshake_timestamp
                             
                             # Log detalhado para debug (INFO para ver melhor)
@@ -354,7 +355,8 @@ def _get_handshake_from_wg_show(interface_name: str, public_key: str) -> Optiona
                 match = re.search(r'(\d+)\s+seconds?\s+ago', line.lower())
                 if match:
                     seconds_ago = int(match.group(1))
-                    current_ts = datetime.utcnow().timestamp()
+                    # Usar timezone UTC explicitamente para garantir cálculo correto
+                    current_ts = datetime.now(timezone.utc).timestamp()
                     handshake_ts = int(current_ts - seconds_ago)
                     logger.debug(f"Handshake atualizado via wg show: {seconds_ago}s atrás = timestamp {handshake_ts}")
                     return handshake_ts
@@ -365,7 +367,8 @@ def _get_handshake_from_wg_show(interface_name: str, public_key: str) -> Optiona
                         minutes_ago = int(match.group(1))
                         seconds_ago = int(match.group(2))
                         total_seconds = minutes_ago * 60 + seconds_ago
-                        current_ts = datetime.utcnow().timestamp()
+                        # Usar timezone UTC explicitamente para garantir cálculo correto
+                        current_ts = datetime.now(timezone.utc).timestamp()
                         handshake_ts = int(current_ts - total_seconds)
                         logger.debug(f"Handshake atualizado via wg show: {minutes_ago}m {seconds_ago}s atrás = timestamp {handshake_ts}")
                         return handshake_ts
