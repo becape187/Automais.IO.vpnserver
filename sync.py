@@ -7,7 +7,7 @@ import logging
 from typing import Dict, Any, List
 from datetime import datetime
 from config import VPN_SERVER_ENDPOINT, API_C_SHARP_URL, SYNC_INTERVAL_SECONDS, WIREGUARD_CONFIG_DIR
-from wireguard import get_interface_name, remove_interface, ensure_interface_exists, add_peer_to_interface
+from wireguard import get_interface_name, remove_interface, ensure_interface_exists, add_peer_to_interface, rebuild_interface_config
 from utils import execute_command
 
 logger = logging.getLogger(__name__)
@@ -266,8 +266,8 @@ async def sync_peers_with_routers(routers: List[Dict[str, Any]], vpn_networks: L
     """
     Sincroniza peers dos routers com as interfaces WireGuard.
     
-    - Se peer existe no banco mas não está na interface → ADICIONA peer
-    - Se peer existe na interface mas não está no banco → REMOVE peer (opcional, pode ser manual)
+    RECONSTRÓI o arquivo completo do zero para cada VPN Network e compara com o arquivo atual.
+    Só atualiza se houver diferenças, garantindo formatação correta.
     """
     try:
         # Criar mapeamento de VPN ID para interface name
@@ -283,97 +283,60 @@ async def sync_peers_with_routers(routers: List[Dict[str, Any]], vpn_networks: L
             logger.debug("Nenhuma interface WireGuard ativa encontrada para sincronizar peers")
             return
         
-        # Processar cada router
-        total_peers_added = 0
-        total_peers_skipped = 0
+        total_files_updated = 0
+        total_peers_count = 0
         
-        for router in routers:
-            router_id = router.get("id")
-            vpn_network_id = router.get("vpn_network_id")
-            peers = router.get("peers", [])
+        # Para cada VPN Network, reconstruir o arquivo completo
+        for vpn_network in vpn_networks:
+            vpn_network_id = vpn_network["id"]
             
-            if not vpn_network_id or not peers:
-                continue
-            
-            # Verificar se a interface existe para esta VPN
             if vpn_network_id not in vpn_to_interface:
-                logger.debug(f"Interface não encontrada para VPN {vpn_network_id}, pulando router {router_id}")
                 continue
             
             interface_name = vpn_to_interface[vpn_network_id]
             
-            # Obter peers existentes na interface
-            existing_peer_keys = await get_existing_peers(interface_name)
+            # Reconstruir arquivo completo
+            was_updated = await rebuild_interface_config(vpn_network, routers)
             
-            # Adicionar peers que estão no banco mas não na interface
-            for peer in peers:
-                public_key = peer.get("public_key", "").strip()
-                allowed_ips = peer.get("allowed_ips", "").strip()
-                is_enabled = peer.get("is_enabled", True)
+            if was_updated:
+                # Contar peers desta VPN
+                peers_count = 0
+                for router in routers:
+                    if router.get("vpn_network_id") == vpn_network_id:
+                        peers = router.get("peers", [])
+                        for peer in peers:
+                            if peer.get("is_enabled", True) and peer.get("public_key") and peer.get("allowed_ips"):
+                                peers_count += 1
                 
-                if not public_key or not allowed_ips:
-                    logger.debug(f"Peer do router {router_id} sem public_key ou allowed_ips, pulando")
-                    continue
-                
-                if not is_enabled:
-                    logger.debug(f"Peer {public_key} está desabilitado, pulando")
-                    continue
-                
-                # Verificar se peer já existe na interface
-                if public_key in existing_peer_keys:
-                    logger.debug(f"Peer {public_key[:16]}... já existe na interface {interface_name}")
-                    # Mesmo que o peer já exista, atualizar comentários com informações atualizadas
-                    try:
-                        await add_peer_to_interface(
-                            interface_name, 
-                            public_key, 
-                            allowed_ips,
-                            router_id=router_id,
-                            router_name=router_name,
-                            vpn_network_id=vpn_network_id,
-                            vpn_network_name=vpn_network_name
-                        )
-                        logger.debug(f"✅ Comentários do peer {public_key[:16]}... atualizados")
-                    except Exception as e:
-                        logger.debug(f"Erro ao atualizar comentários do peer {public_key[:16]}...: {e}")
-                    total_peers_skipped += 1
-                    continue
-                
-                # Buscar informações do router e VPN para comentários
-                router_name = router.get("name", "")
-                vpn_network = next((vpn for vpn in vpn_networks if vpn.get("id") == vpn_network_id), {})
-                vpn_network_name = vpn_network.get("name", "")
-                
-                # Adicionar peer à interface
+                # Sincronizar arquivo com interface ativa
+                config_path = f"{WIREGUARD_CONFIG_DIR}/{interface_name}.conf"
                 try:
-                    await add_peer_to_interface(
-                        interface_name, 
-                        public_key, 
-                        allowed_ips,
-                        router_id=router_id,
-                        router_name=router_name,
-                        vpn_network_id=vpn_network_id,
-                        vpn_network_name=vpn_network_name
-                    )
-                    logger.info(
-                        f"✅ Peer adicionado: router {router_name} ({router_id}) -> interface {interface_name} "
-                        f"(IP: {allowed_ips}, Key: {public_key[:16]}...)"
-                    )
-                    total_peers_added += 1
+                    # Usar wg syncconf para aplicar mudanças sem derrubar conexões
+                    execute_command(f"wg syncconf {interface_name} {config_path}", check=False)
+                    logger.info(f"✅ Interface {interface_name} sincronizada com arquivo atualizado ({peers_count} peer(s))")
+                    total_files_updated += 1
+                    total_peers_count += peers_count
                 except Exception as e:
-                    logger.error(f"❌ Erro ao adicionar peer {public_key[:16]}... à interface {interface_name}: {e}")
+                    logger.error(f"❌ Erro ao sincronizar interface {interface_name}: {e}")
+                    # Tentar recarregar a interface
+                    try:
+                        execute_command(f"wg-quick down {interface_name}", check=False)
+                        execute_command(f"wg-quick up {interface_name}", check=False)
+                        logger.info(f"✅ Interface {interface_name} recarregada")
+                    except Exception as e2:
+                        logger.error(f"❌ Erro ao recarregar interface {interface_name}: {e2}")
         
         # Sincronizar cache em memória com dados da API
         from peer_cache import sync_from_api_data
         sync_from_api_data(routers, vpn_networks)
         
-        if total_peers_added > 0 or total_peers_skipped > 0:
+        if total_files_updated > 0:
             logger.info(
-                f"📊 Sincronização de peers: {total_peers_added} adicionado(s), "
-                f"{total_peers_skipped} já existente(s)"
+                f"📊 Sincronização completa: {total_files_updated} arquivo(s) atualizado(s) "
+                f"com {total_peers_count} peer(s) no total"
             )
         else:
-            logger.debug("✅ Sincronização de peers: nenhuma alteração necessária")
+            logger.debug("✅ Sincronização completa: todos os arquivos já estão atualizados")
             
     except Exception as e:
         logger.error(f"Erro ao sincronizar peers com routers: {e}")

@@ -224,9 +224,32 @@ async def add_peer_to_interface(interface_name: str, public_key: str, allowed_ip
     stdout, _, returncode = execute_command(f"wg show {interface_name}", check=False)
     interface_active = returncode == 0
     
-    # Adicionar/atualizar peer via wg set (funciona mesmo se interface não estiver ativa, mas será aplicado quando ativar)
-    # IMPORTANTE: wg set sempre atualiza o peer, mesmo se já existir
-    execute_command(f"wg set {interface_name} peer {public_key} allowed-ips {allowed_ips}")
+    # Verificar se o peer já existe na interface e se tem allowed-ips configurado
+    peer_has_allowed_ips = False
+    if interface_active:
+        # Verificar se o peer existe e tem allowed-ips
+        wg_show_output, _, _ = execute_command(f"wg show {interface_name} dump", check=False)
+        for line in wg_show_output.split('\n'):
+            if public_key in line:
+                # Formato: <public_key> <endpoint> <allowed_ips> <last_handshake> <transfer_rx> <transfer_tx> <persistent_keepalive>
+                parts = line.split('\t')
+                if len(parts) >= 3:
+                    peer_allowed_ips = parts[2].strip()
+                    if peer_allowed_ips and peer_allowed_ips != "(none)":
+                        peer_has_allowed_ips = True
+                    break
+    
+    # Adicionar/atualizar peer via wg set
+    # IMPORTANTE: Se o peer já existe sem allowed-ips, precisamos forçar a atualização
+    # Usar remove e add para garantir que funciona
+    if interface_active and not peer_has_allowed_ips:
+        # Peer existe mas sem allowed-ips, remover primeiro e depois adicionar
+        logger.info(f"Peer {public_key[:16]}... existe sem allowed-ips, removendo e readicionando...")
+        execute_command(f"wg set {interface_name} peer {public_key} remove", check=False)
+        execute_command(f"wg set {interface_name} peer {public_key} allowed-ips {allowed_ips}", check=False)
+    else:
+        # Peer não existe ou já tem allowed-ips, usar wg set normalmente
+        execute_command(f"wg set {interface_name} peer {public_key} allowed-ips {allowed_ips}", check=False)
     
     # Adicionar ao arquivo de configuração
     config_path = f"{WIREGUARD_CONFIG_DIR}/{interface_name}.conf"
@@ -388,13 +411,129 @@ async def add_peer_to_interface(interface_name: str, public_key: str, allowed_ip
     # Sincronizar arquivo com interface (aplica mudanças sem derrubar conexões existentes)
     if interface_active:
         # Se interface está ativa, usar syncconf que não derruba conexões
+        # IMPORTANTE: syncconf aplica TODAS as mudanças do arquivo na interface ativa
         execute_command(f"wg syncconf {interface_name} {config_path}", check=False)
-        logger.info(f"✅ Peer {public_key[:16]}... adicionado à interface ativa {interface_name}")
+        logger.info(f"✅ Configuração sincronizada: peer {public_key[:16]}... na interface ativa {interface_name}")
     else:
         # Se interface não está ativa, ativar com wg-quick up
         logger.info(f"Interface {interface_name} não está ativa, ativando...")
         execute_command(f"wg-quick up {interface_name}", check=False)
         logger.info(f"✅ Interface {interface_name} ativada com peer {public_key[:16]}...")
+
+
+async def rebuild_interface_config(vpn_network: Dict[str, Any], routers: List[Dict[str, Any]]) -> bool:
+    """
+    Reconstrói o arquivo de configuração completo da interface a partir de todos os peers.
+    Retorna True se o arquivo foi atualizado, False se não houve mudanças.
+    """
+    vpn_network_id = vpn_network["id"]
+    interface_name = get_interface_name(vpn_network_id)
+    config_path = f"{WIREGUARD_CONFIG_DIR}/{interface_name}.conf"
+    
+    # Verificar se arquivo existe
+    if not os.path.exists(config_path):
+        logger.warning(f"Arquivo de configuração {config_path} não existe. Criando...")
+        await ensure_interface_exists(vpn_network)
+        # Se ainda não existe, retornar False
+        if not os.path.exists(config_path):
+            return False
+    
+    # Ler arquivo atual
+    try:
+        with open(config_path, 'r') as f:
+            current_content = f.read()
+    except Exception as e:
+        logger.error(f"Erro ao ler arquivo {config_path}: {e}")
+        return False
+    
+    # Buscar chaves do servidor do arquivo atual ou da VPN Network
+    import re
+    server_private_key_match = re.search(r'PrivateKey\s*=\s*([^\n]+)', current_content)
+    server_private_key = server_private_key_match.group(1).strip() if server_private_key_match else vpn_network.get("server_private_key", "")
+    
+    if not server_private_key:
+        logger.error(f"Chave privada do servidor não encontrada para VPN {vpn_network_id}")
+        return False
+    
+    # Parse CIDR
+    network_ip, prefix_length = parse_cidr(vpn_network["cidr"])
+    server_ip = get_server_ip(network_ip)
+    
+    # Construir novo conteúdo do arquivo
+    new_content = f"""[Interface]
+PrivateKey = {server_private_key}
+Address = {server_ip}/{prefix_length}
+ListenPort = 51820
+"""
+    
+    if vpn_network.get("dns_servers"):
+        new_content += f"DNS = {vpn_network['dns_servers']}\n"
+    
+    new_content += "\n# Peers adicionados automaticamente pela API\n\n"
+    
+    # Adicionar todos os peers habilitados dos routers desta VPN
+    peers_added = 0
+    for router in routers:
+        if router.get("vpn_network_id") != vpn_network_id:
+            continue
+        
+        router_id = router.get("id")
+        router_name = router.get("name", "")
+        peers = router.get("peers", [])
+        
+        for peer in peers:
+            public_key = peer.get("public_key", "").strip()
+            allowed_ips = peer.get("allowed_ips", "").strip()
+            is_enabled = peer.get("is_enabled", True)
+            
+            if not public_key or not allowed_ips or not is_enabled:
+                continue
+            
+            # Adicionar comentários do peer
+            new_content += f"# ============================================\n"
+            new_content += f"# Router: {router_name}\n"
+            new_content += f"# Router ID: {router_id}\n"
+            new_content += f"# VPN Network: {vpn_network.get('name', '')}\n"
+            new_content += f"# VPN Network ID: {vpn_network_id}\n"
+            
+            # Extrair IP do peer (primeiro elemento do allowed_ips)
+            peer_ip = allowed_ips.split(',')[0].strip()
+            if '/' in peer_ip:
+                peer_ip = peer_ip.split('/')[0]
+            new_content += f"# Peer IP: {peer_ip}\n"
+            new_content += f"# Public Key: {public_key}\n"
+            new_content += f"# ============================================\n"
+            
+            # Adicionar seção [Peer]
+            new_content += f"[Peer]\n"
+            new_content += f"PublicKey = {public_key}\n"
+            new_content += f"AllowedIPs = {allowed_ips}\n"
+            new_content += f"PersistentKeepalive = 25\n\n"
+            
+            peers_added += 1
+    
+    # Normalizar espaços em branco para comparação (remover linhas vazias extras no final)
+    current_content_normalized = current_content.rstrip() + "\n"
+    new_content_normalized = new_content.rstrip() + "\n"
+    
+    # Comparar conteúdos
+    if current_content_normalized == new_content_normalized:
+        logger.debug(f"Arquivo {config_path} já está atualizado ({peers_added} peer(s))")
+        return False
+    
+    # Arquivo precisa ser atualizado
+    logger.info(f"Reconstruindo arquivo {config_path} com {peers_added} peer(s)")
+    
+    # Salvar novo conteúdo
+    try:
+        with open(config_path, 'w') as f:
+            f.write(new_content_normalized)
+        execute_command(f"chmod 600 {config_path}", check=False)
+        logger.info(f"✅ Arquivo {config_path} reconstruído com sucesso")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao escrever arquivo {config_path}: {e}")
+        return False
 
 
 async def generate_router_config(router: Dict[str, Any], peer: Dict[str, Any], vpn_network: Dict[str, Any], allowed_networks: List[str]) -> str:
