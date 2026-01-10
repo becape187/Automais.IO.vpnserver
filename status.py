@@ -75,7 +75,9 @@ async def get_wireguard_status() -> Dict[str, Any]:
                         logger.warning(f"Erro ao parsear linha de interface: {line}")
                         continue
                 
-                # Peer tem 8 campos: interface, public_key, endpoint, allowed_ips, latest_handshake, transfer_rx, transfer_tx, persistent_keepalive
+                # Peer pode ter 8 ou 9 campos dependendo da versão do WireGuard
+                # Formato pode ser: interface, public_key, endpoint, allowed_ips, latest_handshake, transfer_rx, transfer_tx, persistent_keepalive
+                # Ou: interface, public_key, (none), endpoint, allowed_ips, latest_handshake, transfer_rx, transfer_tx, persistent_keepalive
                 elif len(parts) >= 8:
                     # Log para debug - verificar ordem dos campos (INFO para ver melhor)
                     logger.info(f"🔍 Parseando peer: {len(parts)} campos")
@@ -114,44 +116,60 @@ async def get_wireguard_status() -> Dict[str, Any]:
                         transfer_rx = 0
                         transfer_tx = 0
                         
-                        # Procurar o endpoint (geralmente tem :porta ou é (none))
-                        for i in range(2, min(8, len(parts))):
-                            if parts[i] == '(none)' or (':' in parts[i] and not parts[i].startswith('10.')):
-                                endpoint = parts[i] if parts[i] != '(none)' else None
-                                break
+                        # Baseado no dump real do WireGuard:
+                        # Campo 0: interface (wg-7464f4d4)
+                        # Campo 1: public_key do peer
+                        # Campo 2: (none) ou endpoint
+                        # Campo 3: endpoint real (se campo 2 for (none))
+                        # Campo 4: allowed_ips (10.222.111.0/24)
+                        # Campo 5: latest_handshake (timestamp Unix)
+                        # Campo 6: transfer_rx (bytes recebidos)
+                        # Campo 7: transfer_tx (bytes enviados)
+                        # Campo 8: persistent_keepalive (off ou número)
                         
-                        # Procurar allowed_ips (contém / ou é um IP com .)
-                        for i in range(2, min(8, len(parts))):
-                            if '/' in parts[i] or ('.' in parts[i] and not ':' in parts[i] and not parts[i].isdigit()):
-                                allowed_ips_str = parts[i].strip()
-                                break
+                        # Endpoint: pode estar no campo 2 ou 3
+                        if len(parts) > 2:
+                            if parts[2] == '(none)' and len(parts) > 3:
+                                # Se campo 2 é (none), endpoint está no campo 3
+                                endpoint = parts[3] if ':' in parts[3] else None
+                            elif ':' in parts[2] and parts[2] != '(none)':
+                                endpoint = parts[2]
                         
-                        # Procurar latest_handshake (número grande, timestamp Unix)
-                        # O timestamp Unix atual é ~1700000000 (10 dígitos), mas pode ser menor se for antigo
-                        for i in range(2, min(8, len(parts))):
-                            candidate = parts[i].strip()
-                            # Timestamp Unix é um número (pode ter 9-10 dígitos)
-                            # Mas não pode ser muito pequeno (menor que 1000000000 = ano 2001)
-                            if candidate and candidate.isdigit():
-                                try:
-                                    ts = int(candidate)
-                                    # Timestamp Unix válido está entre 1000000000 (2001) e 9999999999 (2286)
-                                    if ts >= 1000000000 and ts <= 9999999999:
-                                        latest_handshake_str = candidate
-                                        # Se encontramos o handshake, os próximos campos são transfer_rx e transfer_tx
-                                        if i + 1 < len(parts):
-                                            try:
-                                                transfer_rx = int(parts[i + 1]) if parts[i + 1].strip() else 0
-                                            except (ValueError, IndexError):
-                                                pass
-                                        if i + 2 < len(parts):
-                                            try:
-                                                transfer_tx = int(parts[i + 2]) if parts[i + 2].strip() else 0
-                                            except (ValueError, IndexError):
-                                                pass
-                                        break
-                                except ValueError:
-                                    pass
+                        # Allowed IPs: campo 4
+                        if len(parts) > 4:
+                            allowed_ips_str = parts[4].strip()
+                        
+                        # Latest handshake: campo 5
+                        if len(parts) > 5:
+                            latest_handshake_str = parts[5].strip() if parts[5].strip() else None
+                        
+                        # Transfer RX: campo 6
+                        if len(parts) > 6:
+                            try:
+                                transfer_rx = int(parts[6]) if parts[6].strip() else 0
+                            except (ValueError, IndexError):
+                                pass
+                        
+                        # Transfer TX: campo 7
+                        if len(parts) > 7:
+                            try:
+                                transfer_tx = int(parts[7]) if parts[7].strip() else 0
+                            except (ValueError, IndexError):
+                                pass
+                        
+                        # Log para verificar o timestamp
+                        if latest_handshake_str:
+                            try:
+                                ts = int(latest_handshake_str)
+                                current_ts = datetime.utcnow().timestamp()
+                                diff = current_ts - ts
+                                logger.info(f"📊 Handshake no campo 5: {latest_handshake_str} (timestamp: {ts}, diferença: {diff:.1f}s = {diff/60:.1f}min)")
+                                
+                                # Se o timestamp está muito antigo (> 5 minutos), pode ser um problema
+                                if diff > 300:
+                                    logger.warning(f"⚠️ Timestamp do handshake está muito antigo ({diff/60:.1f}min). O peer pode estar realmente offline ou há um problema com o WireGuard.")
+                            except:
+                                pass
                         
                         # Fallback: se não encontramos, usar ordem padrão
                         if not latest_handshake_str and len(parts) >= 8:
