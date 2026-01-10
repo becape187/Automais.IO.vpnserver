@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
 # Imports dos módulos
-from config import VPN_SERVER_NAME, API_C_SHARP_URL, SYNC_INTERVAL_SECONDS, WIREGUARD_CONFIG_DIR, PORT
+from config import VPN_SERVER_ENDPOINT, API_C_SHARP_URL, SYNC_INTERVAL_SECONDS, WIREGUARD_CONFIG_DIR, PORT
 from models import (
     ProvisionPeerRequest, ProvisionPeerResponse,
     AddNetworkRequest, RemoveNetworkRequest,
@@ -39,7 +39,7 @@ app = FastAPI(
     description=f"""
     Serviço Python para gerenciamento completo de WireGuard.
     
-    **Instância:** {VPN_SERVER_NAME or 'Não configurado'}
+    **Endpoint:** {VPN_SERVER_ENDPOINT or 'Não configurado'}
     
     ## Características
     
@@ -97,7 +97,7 @@ async def sync_existing_interfaces():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Gerencia ciclo de vida da aplicação"""
-    logger.info(f"🚀 Iniciando serviço VPN - Instância: {VPN_SERVER_NAME}")
+    logger.info(f"🚀 Iniciando serviço VPN - Endpoint: {VPN_SERVER_ENDPOINT}")
     await sync_resources_from_api()
     
     # Sincronizar interfaces existentes na inicialização
@@ -131,7 +131,7 @@ async def root():
     return {
         "service": "vpn-service",
         "status": "running",
-        "server_name": VPN_SERVER_NAME,
+        "endpoint": VPN_SERVER_ENDPOINT,
         "managed_resources": {
             "vpn_networks_count": len(managed["vpn_networks"]),
             "routers_count": len(managed["routers"]),
@@ -150,7 +150,7 @@ async def health():
     return {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
-        "server_name": VPN_SERVER_NAME,
+        "endpoint": VPN_SERVER_ENDPOINT,
         "api_url": API_C_SHARP_URL
     }
 
@@ -161,11 +161,11 @@ async def get_managed_resources_endpoint():
     Lista recursos gerenciados por esta instância
     
     Retorna a lista de VPN Networks e Routers que esta instância do serviço VPN gerencia,
-    baseado no `VPN_SERVER_NAME` configurado.
+    baseado no `VPN_SERVER_ENDPOINT` configurado.
     """
     managed = get_managed_resources()
     return {
-        "server_name": VPN_SERVER_NAME,
+        "endpoint": VPN_SERVER_ENDPOINT,
         "vpn_networks": managed["vpn_networks"],
         "routers": managed["routers"],
         "last_sync": managed["last_sync"]

@@ -6,7 +6,7 @@ import httpx
 import logging
 from typing import Dict, Any, List
 from datetime import datetime
-from config import VPN_SERVER_NAME, API_C_SHARP_URL, SYNC_INTERVAL_SECONDS, WIREGUARD_CONFIG_DIR
+from config import VPN_SERVER_ENDPOINT, API_C_SHARP_URL, SYNC_INTERVAL_SECONDS, WIREGUARD_CONFIG_DIR
 from wireguard import get_interface_name, remove_interface, ensure_interface_exists
 from utils import execute_command
 
@@ -22,8 +22,8 @@ managed_resources: Dict[str, Any] = {
 
 async def sync_resources_from_api():
     """Sincroniza recursos (VpnNetworks e Routers) da API C#"""
-    if not VPN_SERVER_NAME:
-        logger.warning("VPN_SERVER_NAME não configurado. Não é possível sincronizar recursos.")
+    if not VPN_SERVER_ENDPOINT:
+        logger.warning("VPN_SERVER_ENDPOINT não configurado. Não é possível sincronizar recursos.")
         return
     
     try:
@@ -37,12 +37,12 @@ async def sync_resources_from_api():
             verify=verify_ssl  # Verificar certificado SSL
         ) as client:
             response = await client.get(
-                f"{API_C_SHARP_URL}/api/vpn-servers/{VPN_SERVER_NAME}/resources",
+                f"{API_C_SHARP_URL}/api/vpn/networks/{VPN_SERVER_ENDPOINT}/resources",
                 headers={"Accept": "application/json"}
             )
             
             if response.status_code == 404:
-                logger.warning(f"Servidor VPN '{VPN_SERVER_NAME}' não encontrado na API principal")
+                logger.warning(f"Nenhuma VpnNetwork encontrada com endpoint '{VPN_SERVER_ENDPOINT}' na API principal")
                 # Limpar tudo se o servidor não existe
                 await cleanup_all_interfaces()
                 managed_resources["vpn_networks"] = []
@@ -86,7 +86,7 @@ async def sync_resources_from_api():
         logger.error(f"   Resposta: {e.response.text[:200]}")
     except Exception as e:
         logger.error(f"❌ Erro ao sincronizar recursos: {type(e).__name__}: {e}")
-        logger.error(f"   URL tentada: {API_C_SHARP_URL}/api/vpn-servers/{VPN_SERVER_NAME}/resources")
+        logger.error(f"   URL tentada: {API_C_SHARP_URL}/api/vpn/networks/{VPN_SERVER_ENDPOINT}/resources")
 
 
 def is_resource_managed(resource_id: str, resource_type: str = "vpn_network") -> bool:

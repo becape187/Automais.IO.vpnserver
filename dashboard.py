@@ -1,7 +1,7 @@
 """
 Dashboard HTML em tempo real do WireGuard
 """
-from config import VPN_SERVER_NAME
+from config import VPN_SERVER_ENDPOINT
 
 
 def get_dashboard_html() -> str:
@@ -12,7 +12,7 @@ def get_dashboard_html() -> str:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WireGuard Dashboard - {VPN_SERVER_NAME or "VPN Server"}</title>
+    <title>WireGuard Dashboard - {VPN_SERVER_ENDPOINT or "VPN Server"}</title>
     <style>
         * {{
             margin: 0;
@@ -180,7 +180,7 @@ def get_dashboard_html() -> str:
         <div class="header">
             <div>
                 <h1>🔒 WireGuard Dashboard</h1>
-                <p style="color: #666; margin-top: 5px;">Instância: <strong>{VPN_SERVER_NAME or "Não configurado"}</strong></p>
+                <p style="color: #666; margin-top: 5px;">Endpoint: <strong>{VPN_SERVER_ENDPOINT or "Não configurado"}</strong></p>
             </div>
             <div class="refresh-indicator" id="refreshIndicator">
                 ⏱️ Atualizando...
