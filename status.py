@@ -123,7 +123,7 @@ async def get_wireguard_status() -> Dict[str, Any]:
                         # Campo 1: public_key do peer
                         # Campo 2: (none) ou endpoint
                         # Campo 3: endpoint real (se campo 2 for (none))
-                        # Campo 4: allowed_ips (10.222.111.0/24)
+                        # Campo 4: allowed_ips (10.222.111.2/24 - IP do router, não da rede!)
                         # Campo 5: latest_handshake (timestamp Unix)
                         # Campo 6: transfer_rx (bytes recebidos)
                         # Campo 7: transfer_tx (bytes enviados)
@@ -137,7 +137,7 @@ async def get_wireguard_status() -> Dict[str, Any]:
                             elif ':' in parts[2] and parts[2] != '(none)':
                                 endpoint = parts[2]
                         
-                        # Allowed IPs: campo 4
+                        # Allowed IPs: campo 4 (contém o IP do router, ex: 10.222.111.2/24)
                         if len(parts) > 4:
                             allowed_ips_str = parts[4].strip()
                         
@@ -159,15 +159,13 @@ async def get_wireguard_status() -> Dict[str, Any]:
                             except (ValueError, IndexError):
                                 pass
                         
-                        # Log para verificar o timestamp
+                        # Log para verificar o timestamp (apenas se muito antigo)
                         if latest_handshake_str:
                             try:
                                 ts = int(latest_handshake_str)
                                 current_ts = datetime.utcnow().timestamp()
                                 diff = current_ts - ts
-                                logger.info(f"📊 Handshake no campo 5: {latest_handshake_str} (timestamp: {ts}, diferença: {diff:.1f}s = {diff/60:.1f}min)")
-                                
-                                # Se o timestamp está muito antigo (> 5 minutos), pode ser um problema
+                                # Só logar se muito antigo para não poluir logs
                                 if diff > 300:
                                     logger.warning(f"⚠️ Timestamp do handshake está muito antigo ({diff/60:.1f}min). O peer pode estar realmente offline ou há um problema com o WireGuard.")
                             except:
@@ -237,15 +235,32 @@ async def get_wireguard_status() -> Dict[str, Any]:
                         else:
                             logger.info(f"Peer {public_key[:16]}... sem handshake válido")
                         
-                        # Buscar informações do router/VPN do arquivo de configuração
-                        peer_info = _get_peer_info_from_config(current_interface, public_key)
+                        # Buscar informações do peer - priorizar cache em memória, depois arquivo de config
+                        from peer_cache import get_peer_info
+                        peer_info = get_peer_info(public_key)
                         
-                        # Extrair IP do peer - priorizar o IP do arquivo de config, senão usar allowed_ips
+                        # Se não encontrou no cache, tentar arquivo de configuração
+                        if not peer_info or not peer_info.get("router_name"):
+                            peer_info = _get_peer_info_from_config(current_interface, public_key)
+                            # Se encontrou no arquivo, atualizar o cache
+                            if peer_info and peer_info.get("router_name"):
+                                from peer_cache import set_peer_info
+                                set_peer_info(
+                                    public_key=public_key,
+                                    router_id=peer_info.get("router_id"),
+                                    router_name=peer_info.get("router_name"),
+                                    vpn_network_id=peer_info.get("vpn_network_id"),
+                                    vpn_network_name=peer_info.get("vpn_network_name"),
+                                    peer_ip=peer_info.get("peer_ip")
+                                )
+                        
+                        # Extrair IP do peer - priorizar cache/config, senão usar allowed_ips
+                        # IMPORTANTE: O allowed_ips do dump contém o IP do router (ex: 10.222.111.2/24), não o IP da rede
                         peer_ip = peer_info.get("peer_ip")
                         if not peer_ip and allowed_ips_str:
                             # Pegar o primeiro IP da lista
                             first_ip = allowed_ips_str.split(',')[0].strip()
-                            # Remover o prefixo CIDR se houver (ex: 10.222.111.0/24 -> 10.222.111.0)
+                            # Remover o prefixo CIDR se houver (ex: 10.222.111.2/24 -> 10.222.111.2)
                             if '/' in first_ip:
                                 peer_ip = first_ip.split('/')[0].strip()
                             else:

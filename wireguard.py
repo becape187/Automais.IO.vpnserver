@@ -246,11 +246,14 @@ async def add_peer_to_interface(interface_name: str, public_key: str, allowed_ip
                 if vpn_network_id:
                     f.write(f"# VPN Network ID: {vpn_network_id}\n")
                 # Adicionar IP configurado do peer
+                # IMPORTANTE: O allowed_ips pode conter o IP do router (ex: 10.222.111.2/24) ou a rede (10.222.111.0/24)
+                # Vamos salvar o primeiro IP da lista, que geralmente é o IP do router
                 if allowed_ips:
-                    # Extrair IP do allowed_ips (pode ser uma rede como 10.222.111.0/24)
+                    # Pegar o primeiro IP da lista (pode ter múltiplos IPs separados por vírgula)
                     peer_ip = allowed_ips.split(',')[0].strip()
+                    # Remover o prefixo CIDR para salvar apenas o IP (ex: 10.222.111.2/24 -> 10.222.111.2)
                     if '/' in peer_ip:
-                        peer_ip = peer_ip.split('/')[0]
+                        peer_ip = peer_ip.split('/')[0].strip()
                     f.write(f"# Peer IP: {peer_ip}\n")
                 f.write(f"# Public Key: {public_key}\n")
                 f.write(f"# ============================================\n")
@@ -261,6 +264,26 @@ async def add_peer_to_interface(interface_name: str, public_key: str, allowed_ip
             
             execute_command(f"chmod 600 {config_path}", check=False)
             logger.info(f"Peer {public_key} adicionado ao arquivo {config_path}")
+            
+            # Atualizar cache em memória
+            from peer_cache import set_peer_info
+            peer_ip = None
+            if allowed_ips:
+                first_ip = allowed_ips.split(',')[0].strip()
+                if '/' in first_ip:
+                    peer_ip = first_ip.split('/')[0].strip()
+                else:
+                    peer_ip = first_ip
+            
+            set_peer_info(
+                public_key=public_key,
+                router_id=router_id,
+                router_name=router_name,
+                vpn_network_id=vpn_network_id,
+                vpn_network_name=vpn_network_name,
+                peer_ip=peer_ip,
+                allowed_ips=allowed_ips
+            )
         else:
             # Peer já existe, atualizar comentários se necessário
             import re
@@ -298,6 +321,26 @@ async def add_peer_to_interface(interface_name: str, public_key: str, allowed_ip
                 logger.info(f"✅ Comentários do peer {public_key[:16]}... atualizados no arquivo {config_path}")
             else:
                 logger.debug(f"Peer {public_key[:16]}... já existe, comentários já estão atualizados")
+            
+            # Atualizar cache em memória mesmo se os comentários não mudaram
+            from peer_cache import set_peer_info
+            peer_ip = None
+            if allowed_ips:
+                first_ip = allowed_ips.split(',')[0].strip()
+                if '/' in first_ip:
+                    peer_ip = first_ip.split('/')[0].strip()
+                else:
+                    peer_ip = first_ip
+            
+            set_peer_info(
+                public_key=public_key,
+                router_id=router_id,
+                router_name=router_name,
+                vpn_network_id=vpn_network_id,
+                vpn_network_name=vpn_network_name,
+                peer_ip=peer_ip,
+                allowed_ips=allowed_ips
+            )
     
     # Sincronizar arquivo com interface (aplica mudanças sem derrubar conexões existentes)
     if interface_active:

@@ -50,10 +50,23 @@ async def background_sync_loop():
 
 
 async def sync_existing_interfaces():
-    """Sincroniza interfaces WireGuard existentes com o banco"""
+    """Sincroniza interfaces WireGuard existentes com o banco e inicializa cache"""
     logger.info("Sincronizando interfaces WireGuard existentes...")
-    # TODO: Implementar sincronização de interfaces existentes
-    pass
+    
+    # Inicializar cache a partir dos arquivos de configuração existentes
+    from peer_cache import sync_from_api_data, get_cache_size
+    from sync import get_managed_resources
+    
+    managed = get_managed_resources()
+    routers = managed.get("routers", [])
+    vpn_networks = managed.get("vpn_networks", [])
+    
+    if routers and vpn_networks:
+        sync_from_api_data(routers, vpn_networks)
+        cache_size = get_cache_size()
+        logger.info(f"✅ Cache inicializado com {cache_size} peer(s) dos arquivos de configuração")
+    else:
+        logger.debug("Nenhum router ou VPN encontrado para inicializar cache")
 
 
 @asynccontextmanager
@@ -255,8 +268,16 @@ async def provision_peer(request: ProvisionPeerRequest):
         allowed_ips_list.extend(request.allowed_networks)
     allowed_ips_str = ",".join(allowed_ips_list)
     
-    # Adicionar peer à interface
-    await add_peer_to_interface(interface_name, public_key, allowed_ips_str)
+    # Adicionar peer à interface com informações completas
+    await add_peer_to_interface(
+        interface_name, 
+        public_key, 
+        allowed_ips_str,
+        router_id=request.router_id,
+        router_name=router.get("name"),
+        vpn_network_id=request.vpn_network_id,
+        vpn_network_name=vpn_network.get("name")
+    )
     
     # Gerar configuração para o router
     peer_data = {

@@ -322,6 +322,20 @@ async def sync_peers_with_routers(routers: List[Dict[str, Any]], vpn_networks: L
                 # Verificar se peer já existe na interface
                 if public_key in existing_peer_keys:
                     logger.debug(f"Peer {public_key[:16]}... já existe na interface {interface_name}")
+                    # Mesmo que o peer já exista, atualizar comentários com informações atualizadas
+                    try:
+                        await add_peer_to_interface(
+                            interface_name, 
+                            public_key, 
+                            allowed_ips,
+                            router_id=router_id,
+                            router_name=router_name,
+                            vpn_network_id=vpn_network_id,
+                            vpn_network_name=vpn_network_name
+                        )
+                        logger.debug(f"✅ Comentários do peer {public_key[:16]}... atualizados")
+                    except Exception as e:
+                        logger.debug(f"Erro ao atualizar comentários do peer {public_key[:16]}...: {e}")
                     total_peers_skipped += 1
                     continue
                 
@@ -348,6 +362,10 @@ async def sync_peers_with_routers(routers: List[Dict[str, Any]], vpn_networks: L
                     total_peers_added += 1
                 except Exception as e:
                     logger.error(f"❌ Erro ao adicionar peer {public_key[:16]}... à interface {interface_name}: {e}")
+        
+        # Sincronizar cache em memória com dados da API
+        from peer_cache import sync_from_api_data
+        sync_from_api_data(routers, vpn_networks)
         
         if total_peers_added > 0 or total_peers_skipped > 0:
             logger.info(
