@@ -84,20 +84,21 @@ async def get_wireguard_status() -> Dict[str, Any]:
                         }
                     current_interface = interface_name
                     try:
-                        endpoint = parts[2] if parts[2] != '(none)' and parts[2] else None
-                        allowed_ips_str = parts[3] if len(parts) > 3 else ""
-                        latest_handshake = parts[4] if len(parts) > 4 and parts[4] != '0' else None
+                        # Formato peer: interface, public_key, endpoint, allowed_ips, latest_handshake, transfer_rx, transfer_tx, persistent_keepalive
+                        endpoint = parts[2] if len(parts) > 2 and parts[2] != '(none)' and parts[2] else None
+                        allowed_ips_str = parts[3] if len(parts) > 3 and parts[3] else ""
+                        latest_handshake = parts[4] if len(parts) > 4 and parts[4] != '0' and parts[4] else None
                         
                         # Transfer pode estar em bytes (números grandes)
                         transfer_rx = 0
                         transfer_tx = 0
                         try:
-                            if len(parts) > 5 and parts[5]:
+                            if len(parts) > 5 and parts[5] and parts[5].strip():
                                 transfer_rx = int(parts[5])
                         except (ValueError, IndexError):
                             pass
                         try:
-                            if len(parts) > 6 and parts[6]:
+                            if len(parts) > 6 and parts[6] and parts[6].strip():
                                 transfer_tx = int(parts[6])
                         except (ValueError, IndexError):
                             pass
@@ -110,11 +111,17 @@ async def get_wireguard_status() -> Dict[str, Any]:
                                 handshake_timestamp = int(latest_handshake)
                                 if handshake_timestamp > 0:
                                     handshake_datetime = datetime.fromtimestamp(handshake_timestamp).isoformat()
-                                    # Considerar online se handshake foi nos últimos 2 minutos
-                                    if datetime.utcnow().timestamp() - handshake_timestamp < 120:
+                                    # Considerar online se handshake foi nos últimos 3 minutos (mais tolerante)
+                                    current_timestamp = datetime.utcnow().timestamp()
+                                    time_diff = current_timestamp - handshake_timestamp
+                                    if time_diff < 180:  # 3 minutos
                                         status = "online"
-                            except (ValueError, TypeError):
+                            except (ValueError, TypeError) as e:
+                                logger.debug(f"Erro ao processar handshake {latest_handshake}: {e}")
                                 pass
+                        
+                        # Buscar informações do router/VPN do arquivo de configuração
+                        peer_info = _get_peer_info_from_config(current_interface, public_key)
                         
                         peer = {
                             "public_key": public_key,
@@ -123,7 +130,11 @@ async def get_wireguard_status() -> Dict[str, Any]:
                             "transfer_rx": transfer_rx,
                             "transfer_tx": transfer_tx,
                             "endpoint": endpoint,
-                            "status": status
+                            "status": status,
+                            "router_name": peer_info.get("router_name"),
+                            "router_id": peer_info.get("router_id"),
+                            "vpn_network_name": peer_info.get("vpn_network_name"),
+                            "vpn_network_id": peer_info.get("vpn_network_id")
                         }
                         interfaces_dict[current_interface]["peers"].append(peer)
                     except (ValueError, IndexError) as e:
@@ -160,4 +171,32 @@ async def get_wireguard_status() -> Dict[str, Any]:
             "error": str(e),
             "timestamp": datetime.utcnow().isoformat()
         }
+
+
+def _get_peer_info_from_config(interface_name: str, public_key: str) -> Dict[str, Optional[str]]:
+    """Extrai informações do router/VPN dos comentários do arquivo de configuração"""
+    config_path = f"{WIREGUARD_CONFIG_DIR}/{interface_name}.conf"
+    if not os.path.exists(config_path):
+        return {}
+    
+    try:
+        with open(config_path, 'r') as f:
+            content = f.read()
+        
+        # Procurar o bloco de comentários antes do peer com esta public_key
+        # Padrão: comentários antes de [Peer] seguido de PublicKey = {public_key}
+        pattern = rf'# Router: (.+?)\n.*?# Router ID: (.+?)\n.*?# VPN Network: (.+?)\n.*?# VPN Network ID: (.+?)\n.*?\[Peer\].*?PublicKey = {re.escape(public_key)}'
+        match = re.search(pattern, content, re.DOTALL)
+        
+        if match:
+            return {
+                "router_name": match.group(1).strip(),
+                "router_id": match.group(2).strip(),
+                "vpn_network_name": match.group(3).strip(),
+                "vpn_network_id": match.group(4).strip()
+            }
+    except Exception as e:
+        logger.debug(f"Erro ao ler informações do peer do arquivo de config: {e}")
+    
+    return {}
 

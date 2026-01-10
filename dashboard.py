@@ -294,19 +294,36 @@ def get_dashboard_html() -> str:
                             new Date(peer.latest_handshake).toLocaleString('pt-BR') : 
                             'Nunca';
 
+                        // Usar nome do router se disponível, senão usar chave pública abreviada
+                        const peerDisplayName = peer.router_name || peer.vpn_network_name || peer.public_key.substring(0, 16) + '...';
+                        const peerSubtitle = peer.router_name && peer.vpn_network_name ? 
+                            `VPN: ${peer.vpn_network_name}` : 
+                            (peer.vpn_network_name || '');
+                        
                         interfaceHtml += `
                             <div class="peer">
                                 <div class="peer-header">
+                                    <div>
+                                        <div style="font-weight: bold; font-size: 16px; color: #333; margin-bottom: 4px;">
+                                            ${{peerDisplayName}}
+                                        </div>
+                                        ${{peerSubtitle ? `<div style="font-size: 12px; color: #666;">${{peerSubtitle}}</div>` : ''}}
+                                    </div>
                                     <span class="status-badge ${{isOnline ? 'status-online' : 'status-offline'}}">
                                         ${{isOnline ? '🟢 Online' : '🔴 Offline'}}
                                     </span>
                                 </div>
-                                <div class="peer-key">${{peer.public_key.substring(0, 44)}}...</div>
                                 <div class="peer-info">
                                     <div class="peer-info-item">
-                                        <strong>IPs Permitidos:</strong><br>
-                                        ${{peer.allowed_ips.join(', ') || 'N/A'}}
+                                        <strong>IP da VPN:</strong><br>
+                                        ${{peer.allowed_ips && peer.allowed_ips.length > 0 ? peer.allowed_ips[0] : 'N/A'}}
                                     </div>
+                                    ${{peer.endpoint ? `
+                                    <div class="peer-info-item">
+                                        <strong>Endpoint:</strong><br>
+                                        ${{peer.endpoint}}
+                                    </div>
+                                    ` : ''}}
                                     <div class="peer-info-item">
                                         <strong>Último Handshake:</strong><br>
                                         ${{handshake}}
@@ -319,12 +336,11 @@ def get_dashboard_html() -> str:
                                         <strong>Upload:</strong><br>
                                         ${{txFormatted}}
                                     </div>
-                                    ${{peer.endpoint ? `
-                                    <div class="peer-info-item">
-                                        <strong>Endpoint:</strong><br>
-                                        ${{peer.endpoint}}
+                                </div>
+                                <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e7eb;">
+                                    <div style="font-size: 10px; color: #999; font-family: monospace;">
+                                        Key: ${{peer.public_key.substring(0, 20)}}...
                                     </div>
-                                    ` : ''}}
                                 </div>
                             </div>
                         `;

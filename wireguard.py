@@ -214,8 +214,8 @@ async def allocate_vpn_ip(vpn_network_id: str, manual_ip: Optional[str] = None) 
     raise HTTPException(status_code=500, detail="Não há IPs disponíveis na rede VPN")
 
 
-async def add_peer_to_interface(interface_name: str, public_key: str, allowed_ips: str):
-    """Adiciona peer à interface WireGuard"""
+async def add_peer_to_interface(interface_name: str, public_key: str, allowed_ips: str, router_id: str = None, router_name: str = None, vpn_network_id: str = None, vpn_network_name: str = None):
+    """Adiciona peer à interface WireGuard com comentários identificadores"""
     # Verificar se interface está ativa
     stdout, _, returncode = execute_command(f"wg show {interface_name}", check=False)
     interface_active = returncode == 0
@@ -234,7 +234,18 @@ async def add_peer_to_interface(interface_name: str, public_key: str, allowed_ip
         
         if not peer_exists:
             with open(config_path, 'a') as f:
-                f.write(f"\n# Peer adicionado automaticamente\n")
+                # Adicionar comentários identificadores
+                f.write(f"\n# ============================================\n")
+                if router_name:
+                    f.write(f"# Router: {router_name}\n")
+                if router_id:
+                    f.write(f"# Router ID: {router_id}\n")
+                if vpn_network_name:
+                    f.write(f"# VPN Network: {vpn_network_name}\n")
+                if vpn_network_id:
+                    f.write(f"# VPN Network ID: {vpn_network_id}\n")
+                f.write(f"# Public Key: {public_key}\n")
+                f.write(f"# ============================================\n")
                 f.write(f"[Peer]\n")
                 f.write(f"PublicKey = {public_key}\n")
                 f.write(f"AllowedIPs = {allowed_ips}\n")

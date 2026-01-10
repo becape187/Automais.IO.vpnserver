@@ -325,11 +325,24 @@ async def sync_peers_with_routers(routers: List[Dict[str, Any]], vpn_networks: L
                     total_peers_skipped += 1
                     continue
                 
+                # Buscar informações do router e VPN para comentários
+                router_name = router.get("name", "")
+                vpn_network = next((vpn for vpn in vpn_networks if vpn.get("id") == vpn_network_id), {})
+                vpn_network_name = vpn_network.get("name", "")
+                
                 # Adicionar peer à interface
                 try:
-                    await add_peer_to_interface(interface_name, public_key, allowed_ips)
+                    await add_peer_to_interface(
+                        interface_name, 
+                        public_key, 
+                        allowed_ips,
+                        router_id=router_id,
+                        router_name=router_name,
+                        vpn_network_id=vpn_network_id,
+                        vpn_network_name=vpn_network_name
+                    )
                     logger.info(
-                        f"✅ Peer adicionado: router {router_id} -> interface {interface_name} "
+                        f"✅ Peer adicionado: router {router_name} ({router_id}) -> interface {interface_name} "
                         f"(IP: {allowed_ips}, Key: {public_key[:16]}...)"
                     )
                     total_peers_added += 1
