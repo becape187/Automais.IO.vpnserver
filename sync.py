@@ -4,9 +4,11 @@ Sincronização de recursos com a API C#
 import os
 import httpx
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 from datetime import datetime
-from config import VPN_SERVER_NAME, API_C_SHARP_URL, SYNC_INTERVAL_SECONDS
+from config import VPN_SERVER_NAME, API_C_SHARP_URL, SYNC_INTERVAL_SECONDS, WIREGUARD_CONFIG_DIR
+from wireguard import get_interface_name, remove_interface, ensure_interface_exists
+from utils import execute_command
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +43,11 @@ async def sync_resources_from_api():
             
             if response.status_code == 404:
                 logger.warning(f"Servidor VPN '{VPN_SERVER_NAME}' não encontrado na API principal")
+                # Limpar tudo se o servidor não existe
+                await cleanup_all_interfaces()
+                managed_resources["vpn_networks"] = []
+                managed_resources["routers"] = []
+                managed_resources["last_sync"] = datetime.utcnow().isoformat()
                 return
             
             if response.status_code != 200:
@@ -48,8 +55,15 @@ async def sync_resources_from_api():
                 return
             
             data = response.json()
-            managed_resources["vpn_networks"] = data.get("vpn_networks", [])
-            managed_resources["routers"] = data.get("routers", [])
+            new_vpn_networks = data.get("vpn_networks", [])
+            new_routers = data.get("routers", [])
+            
+            # Fazer sincronização completa (de-para)
+            await sync_interfaces_with_vpns(new_vpn_networks)
+            
+            # Atualizar cache
+            managed_resources["vpn_networks"] = new_vpn_networks
+            managed_resources["routers"] = new_routers
             managed_resources["last_sync"] = datetime.utcnow().isoformat()
             
             logger.info(
@@ -87,4 +101,215 @@ def is_resource_managed(resource_id: str, resource_type: str = "vpn_network") ->
 def get_managed_resources() -> Dict[str, Any]:
     """Retorna recursos gerenciados"""
     return managed_resources
+
+
+async def get_existing_interfaces() -> List[str]:
+    """Lista todas as interfaces WireGuard existentes no sistema"""
+    try:
+        stdout, stderr, returncode = execute_command("wg show interfaces", check=False)
+        if returncode != 0:
+            return []
+        
+        interfaces = [name.strip() for name in stdout.strip().split('\n') if name.strip()]
+        return interfaces
+    except Exception as e:
+        logger.error(f"Erro ao listar interfaces WireGuard: {e}")
+        return []
+
+
+async def sync_interfaces_with_vpns(vpn_networks: List[Dict[str, Any]]) -> None:
+    """
+    Sincronização completa: garante que interfaces WireGuard correspondem exatamente às VPNs retornadas pela API.
+    
+    - Se VPN existe na API mas não tem interface → CRIA interface
+    - Se interface existe mas VPN não está na API → REMOVE interface
+    - Se não há VPNs na API → REMOVE todas as interfaces
+    """
+    try:
+        # Se não há VPNs na API, remover todas as interfaces
+        if not vpn_networks:
+            logger.warning("⚠️ Nenhuma VPN na API. Removendo todas as interfaces WireGuard...")
+            await cleanup_all_interfaces()
+            return
+        # Obter interfaces existentes no sistema
+        existing_interfaces = await get_existing_interfaces()
+        
+        # Mapear interfaces existentes para VPN IDs
+        # Formato: {vpn_id: interface_name}
+        existing_vpn_to_interface: Dict[str, str] = {}
+        
+        for interface_name in existing_interfaces:
+            if not interface_name.startswith("wg-"):
+                continue
+            
+            # Extrair ID curto da interface (wg-7464f4d4 -> 7464f4d4)
+            interface_short_id = interface_name.replace("wg-", "")
+            
+            # Tentar encontrar VPN correspondente
+            for vpn in vpn_networks:
+                vpn_id_short = vpn["id"].replace("-", "")[:8]
+                if interface_short_id == vpn_id_short:
+                    existing_vpn_to_interface[vpn["id"]] = interface_name
+                    break
+        
+        # Criar conjunto de VPN IDs da API
+        api_vpn_ids = {vpn["id"] for vpn in vpn_networks}
+        
+        # 1. REMOVER: Interfaces que existem mas não estão na API
+        interfaces_to_remove = []
+        for vpn_id, interface_name in existing_vpn_to_interface.items():
+            if vpn_id not in api_vpn_ids:
+                interfaces_to_remove.append((vpn_id, interface_name))
+        
+        if interfaces_to_remove:
+            logger.info(f"🗑️ Removendo {len(interfaces_to_remove)} interface(s) que não estão mais na API")
+            for vpn_id, interface_name in interfaces_to_remove:
+                try:
+                    remove_interface(vpn_id)
+                    logger.info(f"✅ Interface {interface_name} removida (VPN {vpn_id} não está mais na API)")
+                except Exception as e:
+                    logger.error(f"❌ Erro ao remover interface {interface_name} (VPN {vpn_id}): {e}")
+        
+        # 2. REMOVER: Interfaces órfãs (que não correspondem a nenhuma VPN)
+        orphan_interfaces = []
+        for interface_name in existing_interfaces:
+            if not interface_name.startswith("wg-"):
+                continue
+            
+            # Verificar se esta interface corresponde a alguma VPN
+            interface_short_id = interface_name.replace("wg-", "")
+            is_orphan = True
+            
+            for vpn in vpn_networks:
+                vpn_id_short = vpn["id"].replace("-", "")[:8]
+                if interface_short_id == vpn_id_short:
+                    is_orphan = False
+                    break
+            
+            if is_orphan:
+                orphan_interfaces.append(interface_name)
+        
+        if orphan_interfaces:
+            logger.info(f"🗑️ Removendo {len(orphan_interfaces)} interface(s) órfã(s)")
+            for interface_name in orphan_interfaces:
+                try:
+                    execute_command(f"wg-quick down {interface_name}", check=False)
+                    config_path = f"{WIREGUARD_CONFIG_DIR}/{interface_name}.conf"
+                    if os.path.exists(config_path):
+                        os.remove(config_path)
+                        logger.info(f"✅ Arquivo removido: {config_path}")
+                    logger.info(f"✅ Interface órfã {interface_name} removida")
+                except Exception as e:
+                    logger.error(f"❌ Erro ao remover interface órfã {interface_name}: {e}")
+        
+        # 3. CRIAR: VPNs que estão na API mas não têm interface
+        vpns_to_create = []
+        for vpn in vpn_networks:
+            vpn_id = vpn["id"]
+            if vpn_id not in existing_vpn_to_interface:
+                vpns_to_create.append(vpn)
+        
+        if vpns_to_create:
+            logger.info(f"➕ Criando {len(vpns_to_create)} interface(s) para VPN(s) da API")
+            for vpn in vpns_to_create:
+                try:
+                    interface_name = await ensure_interface_exists(vpn)
+                    logger.info(f"✅ Interface {interface_name} criada para VPN {vpn['id']}")
+                except Exception as e:
+                    logger.error(f"❌ Erro ao criar interface para VPN {vpn['id']}: {e}")
+        
+        # Resumo
+        if not interfaces_to_remove and not orphan_interfaces and not vpns_to_create:
+            logger.info("✅ Sincronização completa: tudo está em ordem")
+        else:
+            logger.info(
+                f"📊 Sincronização completa: "
+                f"{len(interfaces_to_remove) + len(orphan_interfaces)} removida(s), "
+                f"{len(vpns_to_create)} criada(s)"
+            )
+            
+    except Exception as e:
+        logger.error(f"Erro ao sincronizar interfaces com VPNs: {e}")
+
+
+async def cleanup_orphan_interfaces(managed_vpn_ids: set) -> None:
+    """Remove interfaces WireGuard que não correspondem a VPNs gerenciadas"""
+    try:
+        existing_interfaces = await get_existing_interfaces()
+        if not existing_interfaces:
+            return
+        
+        # Se não há VPNs gerenciadas, todas as interfaces são órfãs
+        if not managed_vpn_ids:
+            logger.info("Nenhuma VPN gerenciada. Todas as interfaces serão removidas.")
+            return
+        
+        # Para cada interface existente, verificar se corresponde a uma VPN gerenciada
+        for interface_name in existing_interfaces:
+            # Interfaces WireGuard criadas por este serviço seguem o padrão wg-{8_chars}
+            if not interface_name.startswith("wg-"):
+                continue
+            
+            # Extrair os primeiros 8 caracteres do nome da interface
+            interface_short_id = interface_name.replace("wg-", "")
+            
+            # Verificar se existe uma VPN gerenciada que corresponde a esta interface
+            interface_belongs_to_managed_vpn = False
+            for vpn_id in managed_vpn_ids:
+                vpn_id_short = vpn_id.replace("-", "")[:8]
+                if interface_short_id == vpn_id_short:
+                    interface_belongs_to_managed_vpn = True
+                    break
+            
+            # Se não encontrou VPN correspondente, é uma interface órfã
+            if not interface_belongs_to_managed_vpn:
+                logger.warning(f"🗑️ Interface órfã detectada: {interface_name}. Removendo...")
+                try:
+                    # Desativar interface
+                    execute_command(f"wg-quick down {interface_name}", check=False)
+                    
+                    # Remover arquivo de configuração
+                    config_path = f"{WIREGUARD_CONFIG_DIR}/{interface_name}.conf"
+                    if os.path.exists(config_path):
+                        os.remove(config_path)
+                        logger.info(f"✅ Arquivo removido: {config_path}")
+                    
+                    logger.info(f"✅ Interface {interface_name} removida (órfã)")
+                except Exception as e:
+                    logger.error(f"❌ Erro ao remover interface órfã {interface_name}: {e}")
+    except Exception as e:
+        logger.error(f"Erro ao limpar interfaces órfãs: {e}")
+
+
+async def cleanup_all_interfaces() -> None:
+    """Remove todas as interfaces WireGuard quando não há recursos gerenciados"""
+    try:
+        existing_interfaces = await get_existing_interfaces()
+        if not existing_interfaces:
+            logger.info("Nenhuma interface WireGuard encontrada para limpar")
+            return
+        
+        logger.info(f"🗑️ Removendo {len(existing_interfaces)} interface(s) WireGuard...")
+        
+        for interface_name in existing_interfaces:
+            if not interface_name.startswith("wg-"):
+                continue
+                
+            try:
+                # Desativar interface
+                execute_command(f"wg-quick down {interface_name}", check=False)
+                
+                # Remover arquivo de configuração
+                config_path = f"{WIREGUARD_CONFIG_DIR}/{interface_name}.conf"
+                if os.path.exists(config_path):
+                    os.remove(config_path)
+                    logger.info(f"✅ Arquivo removido: {config_path}")
+                
+                logger.info(f"✅ Interface {interface_name} removida")
+            except Exception as e:
+                logger.error(f"❌ Erro ao remover interface {interface_name}: {e}")
+        
+        logger.info("✅ Limpeza completa de interfaces WireGuard concluída")
+    except Exception as e:
+        logger.error(f"Erro ao limpar todas as interfaces: {e}")
 
