@@ -39,20 +39,27 @@ async def get_wireguard_status() -> Dict[str, Any]:
                     "peers": []
                 }
         else:
-            # Parsear saída do dump (formato: interface\tpublic_key\tlisten_port\tfwmark)
-            # e depois peers (formato: interface\tpublic_key\tendpoint\tallowed_ips\tlatest_handshake\ttransfer_rx\ttransfer_tx\tpersistent_keepalive)
+            # Parsear saída do dump
+            # Formato interface: interface_name\tpublic_key\tlisten_port\tfwmark (4 campos)
+            # Formato peer: interface_name\tpublic_key\tendpoint\tallowed_ips\tlatest_handshake\ttransfer_rx\ttransfer_tx\tpersistent_keepalive (8 campos)
             lines = stdout.strip().split('\n')
             current_interface = None
             
             for line in lines:
-                parts = line.split('\t')
-                if len(parts) >= 2:
-                    interface_name = parts[0]
-                    public_key = parts[1]
+                if not line.strip():
+                    continue
                     
-                    # Se é uma linha de interface (tem listen_port)
-                    if len(parts) >= 3 and parts[2].isdigit():
-                        listen_port = int(parts[2])
+                parts = line.split('\t')
+                if len(parts) < 2:
+                    continue
+                    
+                interface_name = parts[0]
+                public_key = parts[1]
+                
+                # Interface tem 4 campos: interface, public_key, listen_port, fwmark
+                if len(parts) == 4:
+                    try:
+                        listen_port = int(parts[2]) if parts[2].isdigit() else 0
                         if interface_name not in interfaces_dict:
                             interfaces_dict[interface_name] = {
                                 "name": interface_name,
@@ -61,13 +68,39 @@ async def get_wireguard_status() -> Dict[str, Any]:
                                 "peers": []
                             }
                         current_interface = interface_name
-                    # Se é uma linha de peer (tem endpoint ou allowed_ips)
-                    elif current_interface and len(parts) >= 4:
-                        endpoint = parts[2] if parts[2] != '(none)' else None
+                    except (ValueError, IndexError):
+                        logger.warning(f"Erro ao parsear linha de interface: {line}")
+                        continue
+                
+                # Peer tem 8 campos: interface, public_key, endpoint, allowed_ips, latest_handshake, transfer_rx, transfer_tx, persistent_keepalive
+                elif len(parts) >= 8:
+                    # Se não há interface atual, criar uma (pode acontecer se peer aparecer antes da interface)
+                    if interface_name not in interfaces_dict:
+                        interfaces_dict[interface_name] = {
+                            "name": interface_name,
+                            "public_key": "",  # Interface não tem public_key própria no dump do peer
+                            "listen_port": 51820,  # Porta padrão
+                            "peers": []
+                        }
+                    current_interface = interface_name
+                    try:
+                        endpoint = parts[2] if parts[2] != '(none)' and parts[2] else None
                         allowed_ips_str = parts[3] if len(parts) > 3 else ""
                         latest_handshake = parts[4] if len(parts) > 4 and parts[4] != '0' else None
-                        transfer_rx = int(parts[5]) if len(parts) > 5 and parts[5].isdigit() else 0
-                        transfer_tx = int(parts[6]) if len(parts) > 6 and parts[6].isdigit() else 0
+                        
+                        # Transfer pode estar em bytes (números grandes)
+                        transfer_rx = 0
+                        transfer_tx = 0
+                        try:
+                            if len(parts) > 5 and parts[5]:
+                                transfer_rx = int(parts[5])
+                        except (ValueError, IndexError):
+                            pass
+                        try:
+                            if len(parts) > 6 and parts[6]:
+                                transfer_tx = int(parts[6])
+                        except (ValueError, IndexError):
+                            pass
                         
                         # Determinar status baseado no handshake
                         status = "offline"
@@ -80,7 +113,7 @@ async def get_wireguard_status() -> Dict[str, Any]:
                                     # Considerar online se handshake foi nos últimos 2 minutos
                                     if datetime.utcnow().timestamp() - handshake_timestamp < 120:
                                         status = "online"
-                            except:
+                            except (ValueError, TypeError):
                                 pass
                         
                         peer = {
@@ -93,6 +126,9 @@ async def get_wireguard_status() -> Dict[str, Any]:
                             "status": status
                         }
                         interfaces_dict[current_interface]["peers"].append(peer)
+                    except (ValueError, IndexError) as e:
+                        logger.warning(f"Erro ao parsear linha de peer: {line}, Erro: {e}")
+                        continue
         
         # Converter dict para lista
         interfaces = list(interfaces_dict.values())
