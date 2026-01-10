@@ -51,6 +51,38 @@ def get_server_ip(network_ip: ipaddress.IPv4Address) -> str:
     return str(server_ip)
 
 
+def normalize_allowed_ips(allowed_ips: str) -> str:
+    """
+    Normaliza AllowedIPs para garantir que IPs individuais usem /32.
+    O primeiro IP (IP do router) deve sempre ser /32.
+    Redes adicionais mantêm seu prefixo original.
+    
+    Exemplos:
+    - "10.222.111.3/24" -> "10.222.111.3/32"
+    - "10.222.111.3/24,192.168.1.0/24" -> "10.222.111.3/32,192.168.1.0/24"
+    - "10.222.111.3/32" -> "10.222.111.3/32" (já correto)
+    """
+    if not allowed_ips or not allowed_ips.strip():
+        return allowed_ips
+    
+    parts = [part.strip() for part in allowed_ips.split(',')]
+    if not parts:
+        return allowed_ips
+    
+    # Normalizar primeiro IP (IP do router) para /32
+    first_ip = parts[0]
+    if '/' in first_ip:
+        ip_addr, prefix = first_ip.split('/', 1)
+        # Se o prefixo não é /32, normalizar para /32
+        if prefix != "32":
+            parts[0] = f"{ip_addr}/32"
+    else:
+        # Se não tem prefixo, adicionar /32
+        parts[0] = f"{first_ip}/32"
+    
+    return ",".join(parts)
+
+
 async def get_main_network_interface() -> Optional[str]:
     """Detecta a interface de rede principal"""
     try:
@@ -514,9 +546,12 @@ async def rebuild_interface_config(vpn_network: Dict[str, Any], routers: List[Di
             new_content += f"# ============================================\n"
             
             # Adicionar seção [Peer]
+            # IMPORTANTE: Normalizar AllowedIPs para garantir que IPs individuais usem /32
+            allowed_ips_normalized = normalize_allowed_ips(allowed_ips)
+            
             new_content += f"[Peer]\n"
             new_content += f"PublicKey = {public_key}\n"
-            new_content += f"AllowedIPs = {allowed_ips}\n"
+            new_content += f"AllowedIPs = {allowed_ips_normalized}\n"
             new_content += f"PersistentKeepalive = 25\n\n"
             
             peers_added += 1
