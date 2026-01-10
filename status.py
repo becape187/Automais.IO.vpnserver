@@ -1,9 +1,12 @@
 """
 Status e monitoramento do WireGuard
 """
+import os
+import re
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from datetime import datetime
+from config import WIREGUARD_CONFIG_DIR
 from utils import execute_command, format_bytes
 
 logger = logging.getLogger(__name__)

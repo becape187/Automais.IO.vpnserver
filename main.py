@@ -35,45 +35,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(
-    title="VPN Service - WireGuard Management",
-    description=f"""
-    Serviço Python para gerenciamento completo de WireGuard.
-    
-    **Endpoint:** {VPN_SERVER_ENDPOINT or 'Não configurado'}
-    
-    ## Características
-    
-    - ✅ Auto-descoberta de recursos via API C#
-    - ✅ Gerenciamento de interfaces WireGuard
-    - ✅ Provisionamento de peers
-    - ✅ Geração de chaves
-    - ✅ Alocação de IPs
-    - ✅ Configuração de firewall (iptables)
-    - ✅ Sincronização periódica
-    
-    ## Acesso à Documentação
-    
-    - **Swagger UI:** `/docs`
-    - **ReDoc:** `/redoc`
-    - **OpenAPI JSON:** `/openapi.json`
-    """,
-    version="1.0.0",
-    contact={
-        "name": "Automais.io",
-        "url": "https://automais.io"
-    }
-)
-
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 
 async def background_sync_loop():
     """Loop em background para sincronizar recursos periodicamente"""
@@ -122,7 +83,45 @@ async def lifespan(app: FastAPI):
     logger.info("🛑 Serviço VPN encerrado")
 
 
-app.router.lifespan_context = lifespan
+app = FastAPI(
+    title="VPN Service - WireGuard Management",
+    description=f"""
+    Serviço Python para gerenciamento completo de WireGuard.
+    
+    **Endpoint:** {VPN_SERVER_ENDPOINT or 'Não configurado'}
+    
+    ## Características
+    
+    - ✅ Auto-descoberta de recursos via API C#
+    - ✅ Gerenciamento de interfaces WireGuard
+    - ✅ Provisionamento de peers
+    - ✅ Geração de chaves
+    - ✅ Alocação de IPs
+    - ✅ Configuração de firewall (iptables)
+    - ✅ Sincronização periódica
+    
+    ## Acesso à Documentação
+    
+    - **Swagger UI:** `/docs`
+    - **ReDoc:** `/redoc`
+    - **OpenAPI JSON:** `/openapi.json`
+    """,
+    version="1.0.0",
+    contact={
+        "name": "Automais.io",
+        "url": "https://automais.io"
+    },
+    lifespan=lifespan
+)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ===== ENDPOINTS =====
