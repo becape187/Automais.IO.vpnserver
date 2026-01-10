@@ -69,10 +69,31 @@ jobs:
             
             echo "📦 Instalando/atualizando dependências Python..."
             
+            # Verificar se python3-venv está instalado
+            if ! dpkg -l | grep -q python3-venv; then
+              echo "Instalando python3-venv..."
+              sudo apt-get update -qq
+              sudo apt-get install -y python3-venv python3-pip
+            fi
+            
+            # Remover venv antigo se existir mas estiver corrompido
+            if [ -d "venv" ] && [ ! -f "venv/bin/activate" ]; then
+              echo "Removendo venv corrompido..."
+              rm -rf venv
+            fi
+            
             # Criar venv se não existir
             if [ ! -d "venv" ]; then
               echo "Criando venv..."
               python3 -m venv venv
+            fi
+            
+            # Verificar se venv foi criado corretamente
+            if [ ! -f "venv/bin/activate" ]; then
+              echo "❌ Erro: Falha ao criar venv. Verificando Python..."
+              python3 --version
+              which python3
+              exit 1
             fi
             
             # Ativar venv e instalar dependências
@@ -80,7 +101,23 @@ jobs:
             pip install --upgrade pip --quiet
             pip install -r requirements.txt --quiet
             
+            # Verificar se uvicorn foi instalado corretamente
+            if [ ! -f "venv/bin/uvicorn" ]; then
+              echo "⚠️  uvicorn não encontrado, instalando novamente..."
+              pip install uvicorn[standard] --quiet
+            fi
+            
+            # Verificar instalação final
+            if [ ! -f "venv/bin/uvicorn" ]; then
+              echo "❌ Erro: uvicorn ainda não está instalado"
+              echo "Conteúdo de venv/bin/:"
+              ls -la venv/bin/ || true
+              exit 1
+            fi
+            
             echo "✅ Dependências instaladas"
+            echo "Verificando instalação:"
+            ls -lh venv/bin/uvicorn || true
             
             # Copiar arquivo de serviço systemd se existir
             if [ -f "deploy/vpnserverio.service" ]; then
