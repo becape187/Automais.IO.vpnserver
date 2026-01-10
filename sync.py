@@ -311,18 +311,34 @@ async def sync_peers_with_routers(routers: List[Dict[str, Any]], vpn_networks: L
                 # Sincronizar arquivo com interface ativa
                 config_path = f"{WIREGUARD_CONFIG_DIR}/{interface_name}.conf"
                 try:
+                    # Validar arquivo antes de sincronizar (verificar se está bem formatado)
+                    # Ler arquivo e verificar se tem formatação correta
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        file_content = f.read()
+                        # Verificar se tem linhas básicas corretas
+                        if '[Interface]' not in file_content or 'PrivateKey =' not in file_content:
+                            raise ValueError(f"Arquivo {config_path} está mal formatado")
+                    
                     # Usar wg syncconf para aplicar mudanças sem derrubar conexões
-                    execute_command(f"wg syncconf {interface_name} {config_path}", check=False)
-                    logger.info(f"✅ Interface {interface_name} sincronizada com arquivo atualizado ({peers_count} peer(s))")
+                    stdout, stderr, returncode = execute_command(f"wg syncconf {interface_name} {config_path}", check=False)
+                    if returncode != 0:
+                        logger.warning(f"wg syncconf retornou erro: {stderr}. Tentando recarregar interface...")
+                        # Se syncconf falhar, recarregar interface
+                        execute_command(f"wg-quick down {interface_name}", check=False)
+                        execute_command(f"wg-quick up {interface_name}", check=False)
+                        logger.info(f"✅ Interface {interface_name} recarregada (syncconf falhou)")
+                    else:
+                        logger.info(f"✅ Interface {interface_name} sincronizada com arquivo atualizado ({peers_count} peer(s))")
+                    
                     total_files_updated += 1
                     total_peers_count += peers_count
                 except Exception as e:
                     logger.error(f"❌ Erro ao sincronizar interface {interface_name}: {e}")
-                    # Tentar recarregar a interface
+                    # Tentar recarregar a interface como último recurso
                     try:
                         execute_command(f"wg-quick down {interface_name}", check=False)
                         execute_command(f"wg-quick up {interface_name}", check=False)
-                        logger.info(f"✅ Interface {interface_name} recarregada")
+                        logger.info(f"✅ Interface {interface_name} recarregada após erro")
                     except Exception as e2:
                         logger.error(f"❌ Erro ao recarregar interface {interface_name}: {e2}")
         

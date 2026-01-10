@@ -148,8 +148,8 @@ ListenPort = 51820
     # Criar diretório se não existir
     os.makedirs(WIREGUARD_CONFIG_DIR, mode=0o700, exist_ok=True)
     
-    # Salvar arquivo
-    with open(config_path, 'w') as f:
+    # Salvar arquivo (usar encoding UTF-8 e newline='\n' para garantir formatação correta)
+    with open(config_path, 'w', encoding='utf-8', newline='\n') as f:
         f.write(config_content)
     
     # Definir permissões (600 = rw-------)
@@ -438,10 +438,20 @@ async def rebuild_interface_config(vpn_network: Dict[str, Any], routers: List[Di
         if not os.path.exists(config_path):
             return False
     
-    # Ler arquivo atual
+    # Ler arquivo atual (usar encoding UTF-8 e tratar erros de encoding)
     try:
-        with open(config_path, 'r') as f:
-            current_content = f.read()
+        # Tentar ler com UTF-8 primeiro
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                current_content = f.read()
+        except UnicodeDecodeError:
+            # Se falhar, tentar com latin-1 e converter
+            logger.warning(f"Arquivo {config_path} tem encoding incorreto. Corrigindo...")
+            with open(config_path, 'r', encoding='latin-1') as f:
+                current_content = f.read()
+            # Reescrever com UTF-8
+            with open(config_path, 'w', encoding='utf-8', newline='\n') as f:
+                f.write(current_content)
     except Exception as e:
         logger.error(f"Erro ao ler arquivo {config_path}: {e}")
         return False
@@ -459,12 +469,11 @@ async def rebuild_interface_config(vpn_network: Dict[str, Any], routers: List[Di
     network_ip, prefix_length = parse_cidr(vpn_network["cidr"])
     server_ip = get_server_ip(network_ip)
     
-    # Construir novo conteúdo do arquivo
-    new_content = f"""[Interface]
-PrivateKey = {server_private_key}
-Address = {server_ip}/{prefix_length}
-ListenPort = 51820
-"""
+    # Construir novo conteúdo do arquivo (usar \n explícito para evitar problemas de encoding)
+    new_content = "[Interface]\n"
+    new_content += f"PrivateKey = {server_private_key}\n"
+    new_content += f"Address = {server_ip}/{prefix_length}\n"
+    new_content += "ListenPort = 51820\n"
     
     if vpn_network.get("dns_servers"):
         new_content += f"DNS = {vpn_network['dns_servers']}\n"
@@ -513,26 +522,54 @@ ListenPort = 51820
             peers_added += 1
     
     # Normalizar espaços em branco para comparação (remover linhas vazias extras no final)
-    current_content_normalized = current_content.rstrip() + "\n"
-    new_content_normalized = new_content.rstrip() + "\n"
+    # Também normalizar espaços em branco no início/fim de cada linha
+    current_lines = [line.rstrip() for line in current_content.split('\n')]
+    new_lines = [line.rstrip() for line in new_content.split('\n')]
+    
+    current_content_normalized = '\n'.join(current_lines).rstrip() + '\n'
+    new_content_normalized = '\n'.join(new_lines).rstrip() + '\n'
     
     # Comparar conteúdos
     if current_content_normalized == new_content_normalized:
-        logger.debug(f"Arquivo {config_path} já está atualizado ({peers_added} peer(s))")
-        return False
+        # Mesmo que o conteúdo pareça igual, verificar se o arquivo tem problemas de encoding
+        # Validar arquivo tentando parsear com wg
+        stdout, stderr, returncode = execute_command(f"wg-quick strip {config_path}", check=False)
+        if returncode != 0:
+            logger.warning(f"Arquivo {config_path} tem problemas de formatação (wg-quick strip falhou). Reconstruindo...")
+            # Forçar reconstrução mesmo que conteúdo pareça igual
+        else:
+            logger.debug(f"Arquivo {config_path} já está atualizado e válido ({peers_added} peer(s))")
+            return False
     
     # Arquivo precisa ser atualizado
     logger.info(f"Reconstruindo arquivo {config_path} com {peers_added} peer(s)")
     
-    # Salvar novo conteúdo
+    # Salvar novo conteúdo (usar encoding UTF-8 e newline='\n' para garantir formatação correta)
     try:
-        with open(config_path, 'w') as f:
+        # Escrever arquivo temporário primeiro
+        temp_path = f"{config_path}.tmp"
+        with open(temp_path, 'w', encoding='utf-8', newline='\n') as f:
             f.write(new_content_normalized)
+        
+        # Validar arquivo temporário com wg-quick strip
+        stdout, stderr, returncode = execute_command(f"wg-quick strip {temp_path}", check=False)
+        if returncode != 0:
+            logger.error(f"Arquivo reconstruído tem problemas de formatação: {stderr}")
+            os.remove(temp_path)
+            return False
+        
+        # Se válido, substituir arquivo original
+        os.replace(temp_path, config_path)
         execute_command(f"chmod 600 {config_path}", check=False)
-        logger.info(f"✅ Arquivo {config_path} reconstruído com sucesso")
+        
+        logger.info(f"✅ Arquivo {config_path} reconstruído com sucesso e validado")
         return True
     except Exception as e:
         logger.error(f"❌ Erro ao escrever arquivo {config_path}: {e}")
+        # Limpar arquivo temporário se existir
+        temp_path = f"{config_path}.tmp"
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
         return False
 
 
