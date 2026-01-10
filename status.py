@@ -77,10 +77,25 @@ async def get_wireguard_status() -> Dict[str, Any]:
                 
                 # Peer tem 8 campos: interface, public_key, endpoint, allowed_ips, latest_handshake, transfer_rx, transfer_tx, persistent_keepalive
                 elif len(parts) >= 8:
-                    # Log para debug - verificar ordem dos campos
-                    logger.debug(f"Parseando peer: {len(parts)} campos")
+                    # Log para debug - verificar ordem dos campos (INFO para ver melhor)
+                    logger.info(f"🔍 Parseando peer: {len(parts)} campos")
                     for idx, part in enumerate(parts[:8]):
-                        logger.debug(f"  Campo {idx}: '{part}'")
+                        # Verificar se é um timestamp válido
+                        is_timestamp = False
+                        if part.strip().isdigit():
+                            try:
+                                ts = int(part.strip())
+                                if ts >= 1000000000 and ts <= 9999999999:
+                                    current_ts = datetime.utcnow().timestamp()
+                                    diff = current_ts - ts
+                                    is_timestamp = True
+                                    logger.info(f"  Campo {idx}: '{part}' ⏰ TIMESTAMP (diferença: {diff:.1f}s = {diff/60:.1f}min)")
+                                else:
+                                    logger.info(f"  Campo {idx}: '{part}' (número, mas não timestamp válido)")
+                            except:
+                                logger.info(f"  Campo {idx}: '{part}'")
+                        else:
+                            logger.info(f"  Campo {idx}: '{part}'")
                     # Se não há interface atual, criar uma (pode acontecer se peer aparecer antes da interface)
                     if interface_name not in interfaces_dict:
                         interfaces_dict[interface_name] = {
