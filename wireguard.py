@@ -591,7 +591,8 @@ async def rebuild_interface_config(vpn_network: Dict[str, Any], routers: List[Di
     elif current_content_normalized == new_content_normalized:
         # Mesmo que o conteúdo pareça igual, verificar se o arquivo tem problemas de encoding
         # Validar arquivo tentando parsear com wg
-        stdout, stderr, returncode = execute_command(f"wg-quick strip {config_path}", check=False)
+        # IMPORTANTE: wg-quick strip espera o nome da interface (sem .conf), não o caminho completo
+        stdout, stderr, returncode = execute_command(f"wg-quick strip {interface_name}", check=False)
         if returncode != 0:
             logger.warning(f"Arquivo {config_path} tem problemas de formatação (wg-quick strip falhou). Reconstruindo...")
             # Forçar reconstrução mesmo que conteúdo pareça igual
@@ -610,7 +611,8 @@ async def rebuild_interface_config(vpn_network: Dict[str, Any], routers: List[Di
             f.write(new_content_normalized)
         
         # Validar arquivo temporário com wg-quick strip
-        stdout, stderr, returncode = execute_command(f"wg-quick strip {temp_path}", check=False)
+        # IMPORTANTE: wg-quick strip espera o nome da interface (sem .conf), não o caminho completo
+        stdout, stderr, returncode = execute_command(f"wg-quick strip {interface_name}", check=False)
         if returncode != 0:
             logger.error(f"Arquivo reconstruído tem problemas de formatação: {stderr}")
             os.remove(temp_path)

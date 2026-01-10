@@ -326,8 +326,9 @@ async def sync_peers_with_routers(routers: List[Dict[str, Any]], vpn_networks: L
                     tmp_path = None
                     try:
                         # Extrair apenas peers usando wg-quick strip
+                        # IMPORTANTE: wg-quick strip espera o nome da interface (sem .conf), não o caminho completo
                         strip_stdout, strip_stderr, strip_returncode = execute_command(
-                            f"wg-quick strip {config_path}",
+                            f"wg-quick strip {interface_name}",
                             check=False
                         )
                         
