@@ -1,0 +1,122 @@
+name: Deploy VPN Server
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+      
+      - name: Create deployment package
+        run: |
+          # Criar arquivo tar com todos os arquivos (exceto .git, venv, etc)
+          tar -czf deploy.tar.gz \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='venv' \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='.env' \
+            --exclude='.DS_Store' \
+            --exclude='*.tar.gz' \
+            .
+      
+      - name: Copy files to server
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          timeout: 300s
+          command_timeout: 300s
+          use_insecure_cipher: false
+          debug: true
+          source: "deploy.tar.gz"
+          target: "/root/automais.io/vpnserver.io/"
+      
+      - name: Deploy on server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          timeout: 300s
+          command_timeout: 300s
+          use_insecure_cipher: false
+          debug: true
+          script: |
+            echo "=== Iniciando deploy VPN Server ==="
+            
+            # Ir para diretório da aplicação
+            cd /root/automais.io/vpnserver.io
+            
+            echo "Extraindo arquivos..."
+            tar -xzf deploy.tar.gz
+            rm deploy.tar.gz
+            
+            echo "📦 Instalando/atualizando dependências Python..."
+            
+            # Criar venv se não existir
+            if [ ! -d "venv" ]; then
+              echo "Criando venv..."
+              python3 -m venv venv
+            fi
+            
+            # Ativar venv e instalar dependências
+            source venv/bin/activate
+            pip install --upgrade pip --quiet
+            pip install -r requirements.txt --quiet
+            
+            echo "✅ Dependências instaladas"
+            
+            # Copiar arquivo de serviço systemd se existir
+            if [ -f "deploy/vpnserverio.service" ]; then
+              echo "Copiando arquivo de serviço systemd..."
+              sudo cp deploy/vpnserverio.service /etc/systemd/system/vpnserverio.service
+              sudo chmod 644 /etc/systemd/system/vpnserverio.service
+            fi
+            
+            echo "Verificando serviço systemd..."
+            if systemctl list-unit-files | grep -q vpnserverio.service; then
+              echo "✓ Serviço encontrado"
+              
+              # Verificar se está habilitado
+              if systemctl is-enabled vpnserverio.service >/dev/null 2>&1; then
+                echo "✓ Serviço está habilitado"
+              else
+                echo "Habilitando serviço..."
+                sudo systemctl enable vpnserverio.service || echo "Aviso: Erro ao habilitar"
+              fi
+              
+              # Recarregar systemd (caso o arquivo tenha sido atualizado)
+              sudo systemctl daemon-reload
+              
+              echo "Reiniciando serviço..."
+              sudo systemctl restart vpnserverio.service
+              
+              # Aguardar um pouco e verificar status
+              sleep 3
+              echo "Status do serviço:"
+              sudo systemctl status vpnserverio.service --no-pager || true
+            else
+              echo "⚠️  Serviço vpnserverio.service não encontrado"
+              echo "Certifique-se de que o serviço foi criado em /etc/systemd/system/vpnserverio.service"
+              echo ""
+              echo "Para criar o serviço manualmente:"
+              echo "  sudo cp deploy/vpnserverio.service /etc/systemd/system/"
+              echo "  sudo systemctl daemon-reload"
+              echo "  sudo systemctl enable vpnserverio.service"
+              echo "  sudo systemctl start vpnserverio.service"
+            fi
+            
+            echo "=== Deploy concluído ==="

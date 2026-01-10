@@ -1,0 +1,24 @@
+[Unit]
+Description=VPN Server Service - WireGuard Management
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/automais.io/vpnserver.io
+ExecStart=/root/automais.io/vpnserver.io/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=10
+KillSignal=SIGINT
+SyslogIdentifier=vpnserverio
+
+# Variáveis de ambiente - IMPORTANTE: cada variável em uma linha separada
+Environment="VPN_SERVER_NAME=vpn-server-usa"
+Environment="API_C_SHARP_URL=http://localhost:5000"
+Environment="SYNC_INTERVAL_SECONDS=60"
+Environment="PORT=8000"
+Environment="WIREGUARD_CONFIG_DIR=/etc/wireguard"
+
+[Install]
+WantedBy=multi-user.target
+
