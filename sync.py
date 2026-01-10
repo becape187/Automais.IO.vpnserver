@@ -4,7 +4,6 @@ Sincronização de recursos com a API C#
 import os
 import httpx
 import logging
-import tempfile
 from typing import Dict, Any, List
 from datetime import datetime
 from config import VPN_SERVER_ENDPOINT, API_C_SHARP_URL, SYNC_INTERVAL_SECONDS, WIREGUARD_CONFIG_DIR
@@ -309,71 +308,18 @@ async def sync_peers_with_routers(routers: List[Dict[str, Any]], vpn_networks: L
                             if peer.get("is_enabled", True) and peer.get("public_key") and peer.get("allowed_ips"):
                                 peers_count += 1
                 
-                # Sincronizar arquivo com interface ativa
-                config_path = f"{WIREGUARD_CONFIG_DIR}/{interface_name}.conf"
+                # Quando houver mudança no arquivo, recarregar interface completamente com down/up
+                # Isso garante que todas as mudanças sejam aplicadas corretamente
                 try:
-                    # Validar arquivo antes de sincronizar (verificar se está bem formatado)
-                    # Ler arquivo e verificar se tem formatação correta
-                    with open(config_path, 'r', encoding='utf-8') as f:
-                        file_content = f.read()
-                        # Verificar se tem linhas básicas corretas
-                        if '[Interface]' not in file_content or 'PrivateKey =' not in file_content:
-                            raise ValueError(f"Arquivo {config_path} está mal formatado")
-                    
-                    # IMPORTANTE: wg syncconf só aceita seções [Peer], não aceita [Interface]
-                    # Usar wg-quick strip para extrair apenas os peers e passar para wg syncconf
-                    # Isso atualiza os peers sem derrubar conexões existentes
-                    tmp_path = None
-                    try:
-                        # Extrair apenas peers usando wg-quick strip
-                        # IMPORTANTE: wg-quick strip espera o nome da interface (sem .conf), não o caminho completo
-                        strip_stdout, strip_stderr, strip_returncode = execute_command(
-                            f"wg-quick strip {interface_name}",
-                            check=False
-                        )
-                        
-                        if strip_returncode != 0:
-                            raise ValueError(f"wg-quick strip falhou: {strip_stderr}")
-                        
-                        # Criar arquivo temporário com apenas os peers
-                        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.conf', dir='/tmp') as tmp_file:
-                            tmp_path = tmp_file.name
-                            tmp_file.write(strip_stdout)
-                            tmp_file.flush()
-                        
-                        # Sincronizar usando arquivo temporário (apenas peers, sem [Interface])
-                        stdout, stderr, returncode = execute_command(
-                            f"wg syncconf {interface_name} {tmp_path}",
-                            check=False
-                        )
-                        
-                        if returncode != 0:
-                            logger.warning(f"wg syncconf retornou erro: {stderr}. Tentando recarregar interface...")
-                            # Se syncconf falhar, recarregar interface (vai derrubar conexões por alguns segundos)
-                            execute_command(f"wg-quick down {interface_name}", check=False)
-                            execute_command(f"wg-quick up {interface_name}", check=False)
-                            logger.info(f"✅ Interface {interface_name} recarregada (syncconf falhou)")
-                        else:
-                            logger.info(f"✅ Interface {interface_name} sincronizada com arquivo atualizado ({peers_count} peer(s))")
-                    finally:
-                        # Remover arquivo temporário se foi criado
-                        if tmp_path and os.path.exists(tmp_path):
-                            try:
-                                os.unlink(tmp_path)
-                            except:
-                                pass
+                    logger.info(f"🔄 Recarregando interface {interface_name} após atualização do arquivo...")
+                    execute_command(f"wg-quick down {interface_name}", check=False)
+                    execute_command(f"wg-quick up {interface_name}", check=False)
+                    logger.info(f"✅ Interface {interface_name} recarregada com sucesso ({peers_count} peer(s))")
                     
                     total_files_updated += 1
                     total_peers_count += peers_count
                 except Exception as e:
-                    logger.error(f"❌ Erro ao sincronizar interface {interface_name}: {e}")
-                    # Tentar recarregar a interface como último recurso
-                    try:
-                        execute_command(f"wg-quick down {interface_name}", check=False)
-                        execute_command(f"wg-quick up {interface_name}", check=False)
-                        logger.info(f"✅ Interface {interface_name} recarregada após erro")
-                    except Exception as e2:
-                        logger.error(f"❌ Erro ao recarregar interface {interface_name}: {e2}")
+                    logger.error(f"❌ Erro ao recarregar interface {interface_name}: {e}")
         
         # Sincronizar cache em memória com dados da API
         from peer_cache import sync_from_api_data
