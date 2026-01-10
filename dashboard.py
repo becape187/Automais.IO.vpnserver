@@ -293,15 +293,15 @@ def get_dashboard_html() -> str:
                         
                         // Formatar handshake considerando timezone local
                         let handshake = 'Nunca';
-                        if (peer.latest_handshake) {
-                            try {
+                        if (peer.latest_handshake) {{
+                            try {{
                                 // Criar objeto Date a partir da string ISO (pode ter 'Z' no final para UTC)
                                 const handshakeDate = new Date(peer.latest_handshake);
                                 // Verificar se a data é válida
-                                if (!isNaN(handshakeDate.getTime())) {
+                                if (!isNaN(handshakeDate.getTime())) {{
                                     // Formatar com timezone local do navegador
                                     // Opções: data completa com hora e timezone
-                                    handshake = handshakeDate.toLocaleString('pt-BR', {
+                                    handshake = handshakeDate.toLocaleString('pt-BR', {{
                                         day: '2-digit',
                                         month: '2-digit',
                                         year: 'numeric',
@@ -309,13 +309,13 @@ def get_dashboard_html() -> str:
                                         minute: '2-digit',
                                         second: '2-digit',
                                         timeZoneName: 'short'
-                                    });
-                                }
-                            } catch (e) {
+                                    }});
+                                }}
+                            }} catch (e) {{
                                 console.error('Erro ao formatar handshake:', e);
                                 handshake = 'Erro ao formatar';
-                            }
-                        }
+                            }}
+                        }}
 
                         // Usar nome do router se disponível, senão usar chave pública abreviada
                         const peerDisplayName = peer.router_name || peer.vpn_network_name || peer.public_key.substring(0, 16) + '...';
