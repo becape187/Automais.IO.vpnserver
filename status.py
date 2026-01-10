@@ -211,11 +211,20 @@ async def get_wireguard_status() -> Dict[str, Any]:
                         
                         if handshake_timestamp and handshake_timestamp > 0:
                             # Converter timestamp Unix para datetime UTC em formato ISO 8601
-                            # O 'Z' indica UTC, o navegador converterá para o timezone local automaticamente
-                            # IMPORTANTE: datetime.utcfromtimestamp() já retorna UTC, então adicionamos 'Z' para indicar UTC
-                            handshake_datetime = datetime.utcfromtimestamp(handshake_timestamp).isoformat() + 'Z'
-                            # Log para debug - verificar se o timestamp está correto
-                            logger.debug(f"Handshake timestamp: {handshake_timestamp} -> ISO: {handshake_datetime}")
+                            # IMPORTANTE: datetime.utcfromtimestamp() retorna UTC
+                            # O timestamp Unix é sempre em UTC, então a conversão deve estar correta
+                            handshake_utc = datetime.utcfromtimestamp(handshake_timestamp)
+                            # Garantir formato ISO 8601 correto com 'Z' para indicar UTC
+                            handshake_datetime = handshake_utc.strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
+                            
+                            # Log para debug - verificar timestamp e conversão
+                            current_utc = datetime.utcnow()
+                            logger.info(
+                                f"🕐 Handshake: timestamp={handshake_timestamp}, "
+                                f"UTC={handshake_utc.strftime('%Y-%m-%d %H:%M:%S')}, "
+                                f"ISO={handshake_datetime}, "
+                                f"Current UTC={current_utc.strftime('%Y-%m-%d %H:%M:%S')}"
+                            )
                             # Considerar online se handshake foi nos últimos 3 minutos (mais tolerante)
                             current_timestamp = datetime.utcnow().timestamp()
                             time_diff = current_timestamp - handshake_timestamp
