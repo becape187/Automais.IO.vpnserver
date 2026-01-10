@@ -19,6 +19,8 @@ async def get_wireguard_status() -> Dict[str, Any]:
     
     try:
         # Usar wg show all dump para obter dados estruturados
+        # NOTA: O wg show all dump tem um bug conhecido onde o timestamp do handshake não é atualizado corretamente
+        # Vamos usar wg show <interface> para obter handshake atualizado depois
         stdout, stderr, returncode = execute_command("wg show all dump", check=False)
         if returncode != 0:
             # Fallback: tentar listar interfaces
@@ -189,39 +191,51 @@ async def get_wireguard_status() -> Dict[str, Any]:
                         
                         # Determinar status baseado no handshake
                         # Lógica: Se handshake foi há menos de 180 segundos (3 minutos), está ONLINE
+                        # IMPORTANTE: O wg show all dump tem um bug onde o timestamp não é atualizado
+                        # Vamos usar wg show <interface> para obter o handshake atualizado
                         status = "offline"
                         handshake_datetime = None
-                        if latest_handshake_str and latest_handshake_str != '0' and latest_handshake_str.strip():
+                        handshake_timestamp = None
+                        
+                        # Tentar obter handshake atualizado via wg show (mais confiável)
+                        updated_handshake = _get_handshake_from_wg_show(current_interface, public_key)
+                        if updated_handshake:
+                            handshake_timestamp = updated_handshake
+                            logger.info(f"✅ Handshake atualizado via wg show: {handshake_timestamp}")
+                        elif latest_handshake_str and latest_handshake_str != '0' and latest_handshake_str.strip():
+                            # Fallback: usar timestamp do dump (pode estar desatualizado)
                             try:
                                 handshake_timestamp = int(latest_handshake_str)
-                                if handshake_timestamp > 0:
-                                    # Converter timestamp Unix para datetime UTC
-                                    handshake_datetime = datetime.utcfromtimestamp(handshake_timestamp).isoformat() + 'Z'
-                                    # Considerar online se handshake foi nos últimos 3 minutos (mais tolerante)
-                                    current_timestamp = datetime.utcnow().timestamp()
-                                    time_diff = current_timestamp - handshake_timestamp
-                                    
-                                    # Log detalhado para debug (INFO para ver melhor)
-                                    logger.info(f"Peer {public_key[:16]}... handshake: ts={handshake_timestamp}, current={current_timestamp:.0f}, diff={time_diff:.1f}s")
-                                    
-                                    # Se a diferença for negativa, o timestamp está no futuro (erro)
-                                    if time_diff < 0:
-                                        logger.warning(f"Peer {public_key[:16]}... timestamp do handshake está no futuro! ts={handshake_timestamp}, current={current_timestamp:.0f}")
-                                        status = "offline"
-                                    # Se handshake foi há menos de 180 segundos (3 minutos), está ONLINE
-                                    elif time_diff < 180:  # 3 minutos (180 segundos)
-                                        status = "online"
-                                        logger.info(f"✅ Peer {public_key[:16]}... ONLINE: handshake há {time_diff:.1f}s")
-                                    else:
-                                        # Converter para minutos e segundos para log mais legível
-                                        minutes = int(time_diff // 60)
-                                        seconds = int(time_diff % 60)
-                                        logger.info(f"❌ Peer {public_key[:16]}... OFFLINE: handshake há {minutes}m {seconds}s ({time_diff:.0f}s, limite: 180s)")
+                                logger.warning(f"⚠️ Usando timestamp do dump (pode estar desatualizado): {handshake_timestamp}")
                             except (ValueError, TypeError) as e:
                                 logger.warning(f"Erro ao processar handshake '{latest_handshake_str}': {e}")
                                 pass
+                        
+                        if handshake_timestamp and handshake_timestamp > 0:
+                            # Converter timestamp Unix para datetime UTC
+                            handshake_datetime = datetime.utcfromtimestamp(handshake_timestamp).isoformat() + 'Z'
+                            # Considerar online se handshake foi nos últimos 3 minutos (mais tolerante)
+                            current_timestamp = datetime.utcnow().timestamp()
+                            time_diff = current_timestamp - handshake_timestamp
+                            
+                            # Log detalhado para debug (INFO para ver melhor)
+                            logger.info(f"Peer {public_key[:16]}... handshake: ts={handshake_timestamp}, current={current_timestamp:.0f}, diff={time_diff:.1f}s")
+                            
+                            # Se a diferença for negativa, o timestamp está no futuro (erro)
+                            if time_diff < 0:
+                                logger.warning(f"Peer {public_key[:16]}... timestamp do handshake está no futuro! ts={handshake_timestamp}, current={current_timestamp:.0f}")
+                                status = "offline"
+                            # Se handshake foi há menos de 180 segundos (3 minutos), está ONLINE
+                            elif time_diff < 180:  # 3 minutos (180 segundos)
+                                status = "online"
+                                logger.info(f"✅ Peer {public_key[:16]}... ONLINE: handshake há {time_diff:.1f}s")
+                            else:
+                                # Converter para minutos e segundos para log mais legível
+                                minutes = int(time_diff // 60)
+                                seconds = int(time_diff % 60)
+                                logger.info(f"❌ Peer {public_key[:16]}... OFFLINE: handshake há {minutes}m {seconds}s ({time_diff:.0f}s, limite: 180s)")
                         else:
-                            logger.info(f"Peer {public_key[:16]}... sem handshake válido: '{latest_handshake_str}'")
+                            logger.info(f"Peer {public_key[:16]}... sem handshake válido")
                         
                         # Buscar informações do router/VPN do arquivo de configuração
                         peer_info = _get_peer_info_from_config(current_interface, public_key)
@@ -289,6 +303,50 @@ async def get_wireguard_status() -> Dict[str, Any]:
             "error": str(e),
             "timestamp": datetime.utcnow().isoformat()
         }
+
+
+def _get_handshake_from_wg_show(interface_name: str, public_key: str) -> Optional[int]:
+    """Obtém o timestamp do handshake usando wg show (mais confiável que dump)"""
+    try:
+        # Usar wg show <interface> para obter handshake atualizado
+        stdout, _, returncode = execute_command(f"wg show {interface_name}", check=False)
+        if returncode != 0:
+            return None
+        
+        # Procurar o peer pela public_key e extrair o handshake
+        lines = stdout.strip().split('\n')
+        in_peer_section = False
+        for line in lines:
+            if public_key in line:
+                in_peer_section = True
+            elif in_peer_section and 'latest handshake:' in line.lower():
+                # Formato: "  latest handshake: 3 seconds ago" ou "  latest handshake: 1 minute, 34 seconds ago"
+                import re
+                # Tentar extrair "X seconds ago" ou "X minutes, Y seconds ago"
+                match = re.search(r'(\d+)\s+seconds?\s+ago', line.lower())
+                if match:
+                    seconds_ago = int(match.group(1))
+                    current_ts = datetime.utcnow().timestamp()
+                    handshake_ts = int(current_ts - seconds_ago)
+                    logger.debug(f"Handshake atualizado via wg show: {seconds_ago}s atrás = timestamp {handshake_ts}")
+                    return handshake_ts
+                else:
+                    # Tentar "X minutes, Y seconds ago"
+                    match = re.search(r'(\d+)\s+minutes?,\s+(\d+)\s+seconds?\s+ago', line.lower())
+                    if match:
+                        minutes_ago = int(match.group(1))
+                        seconds_ago = int(match.group(2))
+                        total_seconds = minutes_ago * 60 + seconds_ago
+                        current_ts = datetime.utcnow().timestamp()
+                        handshake_ts = int(current_ts - total_seconds)
+                        logger.debug(f"Handshake atualizado via wg show: {minutes_ago}m {seconds_ago}s atrás = timestamp {handshake_ts}")
+                        return handshake_ts
+            elif in_peer_section and line.strip().startswith('peer:'):
+                # Próximo peer, parar busca
+                break
+    except Exception as e:
+        logger.debug(f"Erro ao obter handshake via wg show: {e}")
+    return None
 
 
 def _get_peer_info_from_config(interface_name: str, public_key: str) -> Dict[str, Optional[str]]:
