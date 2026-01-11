@@ -85,7 +85,6 @@ jobs:
             echo ""
             echo "Verificando se arquivos de serviço existem:"
             [ -f "deploy/vpnserverio.service" ] && echo "✓ deploy/vpnserverio.service existe" || echo "✗ deploy/vpnserverio.service NÃO existe"
-            [ -f "deploy/routeros.service" ] && echo "✓ deploy/routeros.service existe" || echo "✗ deploy/routeros.service NÃO existe"
             
             echo "📦 Instalando/atualizando dependências Python..."
             
@@ -173,27 +172,6 @@ jobs:
               ls -la deploy/ || echo "Diretório deploy não existe"
             fi
             
-            # Serviço RouterOS WebSocket
-            if [ -f "deploy/routeros.service" ]; then
-              echo "✓ Copiando routeros.service..."
-              sudo cp -v deploy/routeros.service /etc/systemd/system/routeros.service
-              sudo chmod 644 /etc/systemd/system/routeros.service
-              echo "✓ routeros.service copiado com sucesso"
-            else
-              echo "⚠️  ERRO: Arquivo deploy/routeros.service não encontrado"
-              echo "Conteúdo do diretório deploy:"
-              ls -la deploy/ || echo "Diretório deploy não existe"
-              echo "Procurando arquivo routeros.service em outros locais:"
-              find . -name "routeros.service" -type f 2>/dev/null || echo "Arquivo não encontrado em nenhum lugar"
-              echo ""
-              echo "⚠️  Para instalar manualmente, execute no servidor:"
-              echo "    cd /root/automais.io/vpnserver.io"
-              echo "    sudo cp deploy/routeros.service /etc/systemd/system/"
-              echo "    sudo systemctl daemon-reload"
-              echo "    sudo systemctl enable routeros.service"
-              echo "    sudo systemctl start routeros.service"
-            fi
-            
             # Recarregar systemd (caso os arquivos tenham sido atualizados)
             sudo systemctl daemon-reload
             
@@ -227,34 +205,7 @@ jobs:
               echo "  sudo systemctl start vpnserverio.service"
             fi
             
-            # Configurar e iniciar routeros.service
             echo ""
-            echo "🔧 Configurando routeros.service..."
-            if systemctl list-unit-files | grep -q routeros.service; then
-              echo "✓ Serviço routeros encontrado"
-              
-              # Verificar se está habilitado
-              if systemctl is-enabled routeros.service >/dev/null 2>&1; then
-                echo "✓ Serviço routeros está habilitado"
-              else
-                echo "Habilitando routeros.service..."
-                sudo systemctl enable routeros.service || echo "Aviso: Erro ao habilitar"
-              fi
-              
-              echo "Reiniciando routeros.service..."
-              sudo systemctl restart routeros.service
-              
-              # Aguardar um pouco e verificar status
-              sleep 3
-              echo "Status do routeros.service:"
-              sudo systemctl status routeros.service --no-pager || true
-            else
-              echo "⚠️  Serviço routeros.service não encontrado"
-              echo "Para criar o serviço manualmente:"
-              echo "  sudo cp deploy/routeros.service /etc/systemd/system/"
-              echo "  sudo systemctl daemon-reload"
-              echo "  sudo systemctl enable routeros.service"
-              echo "  sudo systemctl start routeros.service"
-            fi
+            echo "ℹ️  Nota: O serviço routeros.service agora é gerenciado pelo repositório routeros.io separado"
             
             echo "=== Deploy concluído ==="
