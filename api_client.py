@@ -26,22 +26,6 @@ async def get_vpn_network_from_api(vpn_network_id: str) -> Optional[Dict[str, An
     return None
 
 
-async def get_router_from_api(router_id: str) -> Optional[Dict[str, Any]]:
-    """Busca dados completos de um Router da API C#"""
-    try:
-        verify_ssl = os.getenv("API_C_SHARP_VERIFY_SSL", "true").lower() == "true"
-        async with httpx.AsyncClient(timeout=30.0, verify=verify_ssl) as client:
-            response = await client.get(
-                f"{API_C_SHARP_URL}/api/routers/{router_id}",
-                headers={"Accept": "application/json"}
-            )
-            if response.status_code == 200:
-                return response.json()
-    except Exception as e:
-        logger.error(f"Erro ao buscar Router {router_id}: {e}")
-    return None
-
-
 async def update_peer_in_api(peer_data: Dict[str, Any]) -> bool:
     """Atualiza peer no banco via API C#"""
     try:
@@ -54,22 +38,6 @@ async def update_peer_in_api(peer_data: Dict[str, Any]) -> bool:
     except Exception as e:
         logger.error(f"Erro ao atualizar peer no banco: {e}")
         return False
-
-
-async def get_router_static_routes_from_api(router_id: str) -> List[Dict[str, Any]]:
-    """Busca rotas estáticas de um router da API C#"""
-    try:
-        verify_ssl = os.getenv("API_C_SHARP_VERIFY_SSL", "true").lower() == "true"
-        async with httpx.AsyncClient(timeout=30.0, verify=verify_ssl) as client:
-            response = await client.get(
-                f"{API_C_SHARP_URL}/api/routers/{router_id}/routes",
-                headers={"Accept": "application/json"}
-            )
-            if response.status_code == 200:
-                return response.json()
-    except Exception as e:
-        logger.error(f"Erro ao buscar rotas do router {router_id}: {e}")
-    return []
 
 
 async def get_router_wireguard_peers_from_api(router_id: str) -> List[Dict[str, Any]]:
@@ -87,28 +55,3 @@ async def get_router_wireguard_peers_from_api(router_id: str) -> List[Dict[str, 
         logger.error(f"Erro ao buscar peers do router {router_id}: {e}")
     return []
 
-
-async def update_router_password_in_api(router_id: str, new_password: str) -> bool:
-    """Atualiza a senha do router no banco de dados via API C#
-    
-    Atualiza:
-    - RouterOsApiPassword -> NULL
-    - AutomaisApiPassword -> nova senha forte
-    """
-    try:
-        verify_ssl = os.getenv("API_C_SHARP_VERIFY_SSL", "true").lower() == "true"
-        async with httpx.AsyncClient(timeout=30.0, verify=verify_ssl) as client:
-            response = await client.put(
-                f"{API_C_SHARP_URL}/api/routers/{router_id}/password",
-                json={"password": new_password},
-                headers={"Accept": "application/json", "Content-Type": "application/json"}
-            )
-            if response.status_code == 200:
-                logger.info(f"Senha do router {router_id} atualizada no banco (RouterOsApiPassword=NULL, AutomaisApiPassword=nova senha)")
-                return True
-            else:
-                logger.error(f"Erro ao atualizar senha do router {router_id}: Status {response.status_code}")
-                return False
-    except Exception as e:
-        logger.error(f"Erro ao atualizar senha do router {router_id} no banco: {e}")
-        return False
