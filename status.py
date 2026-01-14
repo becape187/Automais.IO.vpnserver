@@ -32,7 +32,7 @@ async def get_wireguard_status() -> Dict[str, Any]:
                     "total_peers": 0,
                     "total_rx": 0,
                     "total_tx": 0,
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now(timezone.utc).isoformat()
                 }
             # Se não tem dump, usar método antigo
             interface_names = [name.strip() for name in stdout.strip().split('\n') if name.strip()]
@@ -85,25 +85,8 @@ async def get_wireguard_status() -> Dict[str, Any]:
                 # Formato pode ser: interface, public_key, endpoint, allowed_ips, latest_handshake, transfer_rx, transfer_tx, persistent_keepalive
                 # Ou: interface, public_key, (none), endpoint, allowed_ips, latest_handshake, transfer_rx, transfer_tx, persistent_keepalive
                 elif len(parts) >= 8:
-                    # Log para debug - verificar ordem dos campos (INFO para ver melhor)
-                    logger.info(f"🔍 Parseando peer: {len(parts)} campos")
-                    for idx, part in enumerate(parts[:8]):
-                        # Verificar se é um timestamp válido
-                        is_timestamp = False
-                        if part.strip().isdigit():
-                            try:
-                                ts = int(part.strip())
-                                if ts >= 1000000000 and ts <= 9999999999:
-                                    current_ts = datetime.utcnow().timestamp()
-                                    diff = current_ts - ts
-                                    is_timestamp = True
-                                    logger.info(f"  Campo {idx}: '{part}' ⏰ TIMESTAMP (diferença: {diff:.1f}s = {diff/60:.1f}min)")
-                                else:
-                                    logger.info(f"  Campo {idx}: '{part}' (número, mas não timestamp válido)")
-                            except:
-                                logger.info(f"  Campo {idx}: '{part}'")
-                        else:
-                            logger.info(f"  Campo {idx}: '{part}'")
+                    # Log apenas em modo debug para não poluir logs
+                    logger.debug(f"🔍 Parseando peer: {len(parts)} campos")
                     # Se não há interface atual, criar uma (pode acontecer se peer aparecer antes da interface)
                     if interface_name not in interfaces_dict:
                         interfaces_dict[interface_name] = {
@@ -151,30 +134,18 @@ async def get_wireguard_status() -> Dict[str, Any]:
                         if len(parts) > 5:
                             latest_handshake_str = parts[5].strip() if parts[5].strip() else None
                         
-                        # Transfer RX: campo 6
+                        # Transfer RX: campo 6 (bytes recebidos - não é timestamp)
                         if len(parts) > 6:
                             try:
                                 transfer_rx = int(parts[6]) if parts[6].strip() else 0
                             except (ValueError, IndexError):
                                 pass
                         
-                        # Transfer TX: campo 7
+                        # Transfer TX: campo 7 (bytes enviados - não é timestamp)
                         if len(parts) > 7:
                             try:
                                 transfer_tx = int(parts[7]) if parts[7].strip() else 0
                             except (ValueError, IndexError):
-                                pass
-                        
-                        # Log para verificar o timestamp (apenas se muito antigo)
-                        if latest_handshake_str:
-                            try:
-                                ts = int(latest_handshake_str)
-                                current_ts = datetime.utcnow().timestamp()
-                                diff = current_ts - ts
-                                # Só logar se muito antigo para não poluir logs
-                                if diff > 300:
-                                    logger.warning(f"⚠️ Timestamp do handshake está muito antigo ({diff/60:.1f}min). O peer pode estar realmente offline ou há um problema com o WireGuard.")
-                            except:
                                 pass
                         
                         # Fallback: se não encontramos, usar ordem padrão
@@ -205,7 +176,7 @@ async def get_wireguard_status() -> Dict[str, Any]:
                         updated_handshake = _get_handshake_from_wg_show(current_interface, public_key)
                         if updated_handshake:
                             handshake_timestamp = updated_handshake
-                            logger.info(f"✅ Handshake atualizado via wg show: {handshake_timestamp}")
+                            logger.debug(f"✅ Handshake atualizado via wg show: {handshake_timestamp}")
                         elif latest_handshake_str and latest_handshake_str != '0' and latest_handshake_str.strip():
                             # Fallback: usar timestamp do dump (pode estar desatualizado)
                             try:
@@ -225,35 +196,43 @@ async def get_wireguard_status() -> Dict[str, Any]:
                             
                             # Log para debug - verificar timestamp e conversão
                             current_utc = datetime.now(timezone.utc)
-                            logger.info(
+                            logger.debug(
                                 f"🕐 Handshake: timestamp={handshake_timestamp}, "
                                 f"UTC={handshake_utc.strftime('%Y-%m-%d %H:%M:%S')}, "
                                 f"ISO={handshake_datetime}, "
                                 f"Current UTC={current_utc.strftime('%Y-%m-%d %H:%M:%S')}"
                             )
                             # Considerar online se handshake foi nos últimos 3 minutos (mais tolerante)
-                            # Usar timezone UTC explicitamente
+                            # IMPORTANTE: Ambos os timestamps devem estar em UTC para comparação correta
+                            # - handshake_timestamp: Unix timestamp do WireGuard (sempre em UTC)
+                            # - current_timestamp: Unix timestamp atual em UTC
+                            # A diferença será em segundos, independente do timezone do sistema
                             current_timestamp = datetime.now(timezone.utc).timestamp()
                             time_diff = current_timestamp - handshake_timestamp
                             
-                            # Log detalhado para debug (INFO para ver melhor)
-                            logger.info(f"Peer {public_key[:16]}... handshake: ts={handshake_timestamp}, current={current_timestamp:.0f}, diff={time_diff:.1f}s")
+                            # Log detalhado para debug
+                            logger.debug(f"Peer {public_key[:16]}... handshake: ts={handshake_timestamp}, current={current_timestamp:.0f}, diff={time_diff:.1f}s")
                             
                             # Se a diferença for negativa, o timestamp está no futuro (erro)
                             if time_diff < 0:
                                 logger.warning(f"Peer {public_key[:16]}... timestamp do handshake está no futuro! ts={handshake_timestamp}, current={current_timestamp:.0f}")
                                 status = "offline"
                             # Se handshake foi há menos de 180 segundos (3 minutos), está ONLINE
+                            # IMPORTANTE: time_diff está em segundos (diferença entre timestamps Unix em UTC)
                             elif time_diff < 180:  # 3 minutos (180 segundos)
                                 status = "online"
-                                logger.info(f"✅ Peer {public_key[:16]}... ONLINE: handshake há {time_diff:.1f}s")
+                                logger.debug(f"✅ Peer {public_key[:16]}... ONLINE: handshake há {time_diff:.1f}s")
                             else:
                                 # Converter para minutos e segundos para log mais legível
                                 minutes = int(time_diff // 60)
                                 seconds = int(time_diff % 60)
-                                logger.info(f"❌ Peer {public_key[:16]}... OFFLINE: handshake há {minutes}m {seconds}s ({time_diff:.0f}s, limite: 180s)")
+                                # Só gerar warning se realmente estiver offline (após atualizar via wg show)
+                                if time_diff > 300:  # Mais de 5 minutos
+                                    logger.warning(f"⚠️ Peer {public_key[:16]}... OFFLINE: handshake há {minutes}m {seconds}s. O peer pode estar realmente offline ou há um problema com o WireGuard.")
+                                else:
+                                    logger.debug(f"❌ Peer {public_key[:16]}... OFFLINE: handshake há {minutes}m {seconds}s ({time_diff:.0f}s, limite: 180s)")
                         else:
-                            logger.info(f"Peer {public_key[:16]}... sem handshake válido")
+                            logger.debug(f"Peer {public_key[:16]}... sem handshake válido")
                         
                         # Buscar informações do peer - priorizar cache em memória, depois arquivo de config
                         from peer_cache import get_peer_info
@@ -329,7 +308,7 @@ async def get_wireguard_status() -> Dict[str, Any]:
             "total_tx": total_tx,
             "total_rx_formatted": format_bytes(total_rx),
             "total_tx_formatted": format_bytes(total_tx),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
     except Exception as e:
@@ -341,7 +320,7 @@ async def get_wireguard_status() -> Dict[str, Any]:
             "total_rx": 0,
             "total_tx": 0,
             "error": str(e),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
 

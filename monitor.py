@@ -12,7 +12,7 @@ import httpx
 from config import API_C_SHARP_URL, MONITOR_INTERVAL_SECONDS, PING_ATTEMPTS, PING_TIMEOUT_MS, MAX_CONCURRENT_PINGS
 from sync import get_managed_resources
 from status import get_wireguard_status
-from api_client import get_router_wireguard_peers_from_api
+from api_client import get_router_wireguard_peers_from_api, update_router_status_in_api
 
 logger = logging.getLogger(__name__)
 
@@ -275,12 +275,36 @@ async def monitor_router(router: Dict[str, Any]) -> None:
             update_data["bytes_received"] = peer_wg_stats.get("transfer_rx", 0)
             update_data["bytes_sent"] = peer_wg_stats.get("transfer_tx", 0)
         
-        # Atualizar no banco
+        # Determinar status do router baseado no status do peer WireGuard
+        # Priorizar status do WireGuard (mais confiável), mas considerar ping também
+        router_is_online = False
+        status_source = "unknown"
+        if peer_wg_stats:
+            peer_status = peer_wg_stats.get("status", "offline")
+            router_is_online = peer_status == "online"
+            status_source = "wireguard"
+            logger.debug(f"Status do router {router_name} baseado em WireGuard: {peer_status}")
+        else:
+            # Se não encontrou stats do WireGuard, usar ping como fallback
+            router_is_online = ping_result.get("success", False)
+            status_source = "ping"
+            logger.debug(f"Status do router {router_name} baseado em ping: {'online' if router_is_online else 'offline'}")
+        
+        # Atualizar status do router no banco
+        if router_id:
+            status_updated = await update_router_status_in_api(router_id, router_is_online)
+            if status_updated:
+                logger.info(f"✅ Status do router {router_name} ({router_id}) atualizado: {'online' if router_is_online else 'offline'} (fonte: {status_source})")
+            else:
+                logger.warning(f"⚠️ Falha ao atualizar status do router {router_name} ({router_id}) no banco")
+        
+        # Atualizar stats do peer no banco
         if peer_id:
             success = await update_peer_stats_in_api(peer_id, update_data)
             if success:
                 logger.debug(
                     f"✅ Stats atualizados para router {router_name} ({router_ip}): "
+                    f"status={'online' if router_is_online else 'offline'}, "
                     f"ping={'OK' if ping_result.get('success') else 'FAIL'}, "
                     f"latency={ping_result.get('avg_time_ms', 'N/A')}ms"
                 )
