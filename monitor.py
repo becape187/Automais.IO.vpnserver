@@ -293,13 +293,30 @@ async def monitor_router(router: Dict[str, Any]) -> None:
             update_data["bytes_received"] = peer_wg_stats.get("transfer_rx", 0)
             update_data["bytes_sent"] = peer_wg_stats.get("transfer_tx", 0)
         
-        # Atualizar status do router no banco (tentar múltiplos endpoints)
+        # Preparar dados para atualização do router
+        router_update_data = {}
+        
+        # Status do router
+        status_value = 1 if router_is_online else 2  # RouterStatus.Online = 1, RouterStatus.Offline = 2
+        router_update_data["status"] = status_value
+        
+        # Se router está online, atualizar LastSeenAt e Latency
+        if router_is_online:
+            router_update_data["lastSeenAt"] = datetime.now(timezone.utc).isoformat()
+            
+            # Latência do ping (converter para int se disponível)
+            if ping_result.get("avg_time_ms") is not None:
+                router_update_data["latency"] = int(round(ping_result.get("avg_time_ms")))
+        
+        # Atualizar dados do router no banco
         if router_id:
-            status_updated = await update_router_status_in_api(router_id, router_is_online)
+            from api_client import update_router_data_in_api
+            status_updated = await update_router_data_in_api(router_id, router_update_data)
             if status_updated:
-                logger.info(f"✅ Status do router {router_name} ({router_id}) atualizado: {'online' if router_is_online else 'offline'} (fonte: {status_source})")
+                updated_fields = list(router_update_data.keys())
+                logger.info(f"✅ Dados do router {router_name} ({router_id}) atualizados: {updated_fields} (status={'online' if router_is_online else 'offline'}, fonte: {status_source})")
             else:
-                logger.debug(f"⚠️ Falha ao atualizar status do router {router_name} ({router_id}) via endpoint dedicado (tentando via peer stats)")
+                logger.debug(f"⚠️ Falha ao atualizar dados do router {router_name} ({router_id})")
         
         # Atualizar stats do peer no banco (inclui router_is_online no payload caso API atualize automaticamente)
         if peer_id:
