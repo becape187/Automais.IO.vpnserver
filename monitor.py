@@ -12,7 +12,7 @@ import httpx
 from config import API_C_SHARP_URL, MONITOR_INTERVAL_SECONDS, PING_ATTEMPTS, PING_TIMEOUT_MS, MAX_CONCURRENT_PINGS
 from sync import get_managed_resources
 from status import get_wireguard_status
-from api_client import get_router_wireguard_peers_from_api, update_router_status_in_api
+from api_client import get_router_wireguard_peers_from_api, update_router_status_in_api, update_router_data_in_api
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +207,8 @@ async def monitor_router(router: Dict[str, Any]) -> None:
     router_name = router.get("name", "Unknown")
     peers = router.get("peers", [])
     
+    logger.debug(f"🔍 Monitorando router {router_name} ({router_id}) - {len(peers)} peer(s) encontrado(s)")
+    
     if not peers:
         logger.debug(f"Router {router_name} ({router_id}) não tem peers, pulando monitoramento")
         return
@@ -226,7 +228,7 @@ async def monitor_router(router: Dict[str, Any]) -> None:
     router_ip = await get_router_ip_from_peer(active_peer)
     
     if not router_ip:
-        logger.debug(f"Router {router_name} ({router_id}) não tem IP válido para ping")
+        logger.warning(f"⚠️ Router {router_name} ({router_id}) não tem IP válido para ping. Peer ID: {peer_id}, AllowedIPs: {active_peer.get('allowedIps', 'N/A')}")
         return
     
     # Fazer ping com semáforo (limita concorrência)
@@ -294,6 +296,7 @@ async def monitor_router(router: Dict[str, Any]) -> None:
             update_data["bytes_sent"] = peer_wg_stats.get("transfer_tx", 0)
         
         # Preparar dados para atualização do router
+        # IMPORTANTE: Usar PascalCase para compatibilidade com C# (LastSeenAt, Latency, etc)
         router_update_data = {}
         
         # Status do router
@@ -308,15 +311,17 @@ async def monitor_router(router: Dict[str, Any]) -> None:
             if ping_result.get("avg_time_ms") is not None:
                 router_update_data["latency"] = int(round(ping_result.get("avg_time_ms")))
         
+        logger.debug(f"📋 Dados preparados para atualização do router {router_name}: {router_update_data}")
+        
         # Atualizar dados do router no banco
         if router_id:
-            from api_client import update_router_data_in_api
+            logger.info(f"📤 Atualizando dados do router {router_name} ({router_id}): {list(router_update_data.keys())}")
             status_updated = await update_router_data_in_api(router_id, router_update_data)
             if status_updated:
                 updated_fields = list(router_update_data.keys())
-                logger.info(f"✅ Dados do router {router_name} ({router_id}) atualizados: {updated_fields} (status={'online' if router_is_online else 'offline'}, fonte: {status_source})")
+                logger.info(f"✅ Dados do router {router_name} ({router_id}) atualizados com sucesso: {updated_fields} (status={'online' if router_is_online else 'offline'}, fonte: {status_source})")
             else:
-                logger.debug(f"⚠️ Falha ao atualizar dados do router {router_name} ({router_id})")
+                logger.warning(f"⚠️ Falha ao atualizar dados do router {router_name} ({router_id}) no banco. Payload: {router_update_data}")
         
         # Atualizar stats do peer no banco (inclui router_is_online no payload caso API atualize automaticamente)
         if peer_id:
