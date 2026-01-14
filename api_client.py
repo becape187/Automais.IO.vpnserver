@@ -57,42 +57,39 @@ async def get_router_wireguard_peers_from_api(router_id: str) -> List[Dict[str, 
 
 
 async def update_router_status_in_api(router_id: str, is_online: bool) -> bool:
-    """Atualiza status online/offline do router no banco via API C#"""
+    """
+    Atualiza status online/offline do router no banco via API C#
+    
+    Usa PUT /api/routers/{id} com UpdateRouterDto contendo Status:
+    - RouterStatus.Online = 1 (online)
+    - RouterStatus.Offline = 2 (offline)
+    """
     try:
         verify_ssl = os.getenv("API_C_SHARP_VERIFY_SSL", "true").lower() == "true"
-        url = f"{API_C_SHARP_URL}/api/routers/{router_id}/status"
-        payload = {"is_online": is_online}
+        # RouterStatus enum: Online = 1, Offline = 2
+        status_value = 1 if is_online else 2
+        payload = {"status": status_value}
+        
+        url = f"{API_C_SHARP_URL}/api/routers/{router_id}"
         
         async with httpx.AsyncClient(timeout=30.0, verify=verify_ssl) as client:
-            response = await client.patch(
+            response = await client.put(
                 url,
                 json=payload,
                 headers={"Accept": "application/json", "Content-Type": "application/json"}
             )
             
-            if response.status_code in [200, 204]:
-                logger.info(f"✅ Status do router {router_id} atualizado: {'online' if is_online else 'offline'}")
+            if response.status_code == 200:
+                logger.info(f"✅ Status do router {router_id} atualizado: {'online' if is_online else 'offline'} (status={status_value})")
                 return True
+            elif response.status_code == 404:
+                logger.warning(f"⚠️ Router {router_id} não encontrado (404)")
+                return False
             else:
                 logger.warning(
                     f"⚠️ Erro ao atualizar status do router {router_id}: "
                     f"HTTP {response.status_code} - {response.text[:200]}"
                 )
-                # Tentar endpoint alternativo se o primeiro falhar
-                if response.status_code == 404:
-                    # Tentar endpoint alternativo: /api/routers/{router_id}
-                    try:
-                        alt_url = f"{API_C_SHARP_URL}/api/routers/{router_id}"
-                        alt_response = await client.patch(
-                            alt_url,
-                            json=payload,
-                            headers={"Accept": "application/json", "Content-Type": "application/json"}
-                        )
-                        if alt_response.status_code in [200, 204]:
-                            logger.info(f"✅ Status do router {router_id} atualizado via endpoint alternativo: {'online' if is_online else 'offline'}")
-                            return True
-                    except Exception as alt_e:
-                        logger.debug(f"Endpoint alternativo também falhou: {alt_e}")
                 return False
     except httpx.TimeoutException:
         logger.error(f"⏱️ Timeout ao atualizar status do router {router_id}")
